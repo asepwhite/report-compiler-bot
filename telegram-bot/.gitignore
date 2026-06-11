@@ -18,4 +18,3 @@ build/
 .env.local
 .env.development
 .env.production
-graphify-out/
