@@ -1,6 +1,22 @@
-# Discord Bot
+# Discord Report Compiler Bot
 
-A minimal Discord bot that listens to messages in servers and prints them to the console.
+A Discord bot that compiles project report PDFs from channel messages containing images and structured metadata.
+
+## Features
+
+- **Mention-based command**: `@reporting-bot compile {start-date} {end-date}` (yyyy-mm-dd, GMT+7, inclusive)
+- **Acknowledgment**: Bot replies "perintah diterima, compiling reports..." upon receiving the command
+- **Message filtering**: Only processes messages with image attachments and the format:
+  ```
+  id: {tower-id}
+  sub-id: {tower-section}
+  tanggal: {yyyy-mm-dd}
+  ```
+- **PDF generation**: Creates a PDF per `tower-id` with:
+  - Title: `Progress report {id} - {start date} - {end date}`
+  - Sections per `sub-id` with images in a grid layout (3 columns)
+  - Filename: `report-{id}-{start date}-{end date}.pdf`
+- **Output**: Uploads all generated PDFs back to the Discord channel
 
 ## Setup
 
@@ -22,6 +38,7 @@ A minimal Discord bot that listens to messages in servers and prints them to the
    - `Send Messages`
    - `Read Message History`
    - `View Channels`
+   - `Attach Files` (required to upload PDFs)
 4. Copy the generated URL and paste it in your browser
 5. Choose a server you own and authorize the bot
 
@@ -49,42 +66,25 @@ You should see:
 ✅ Bot is online! Logged in as YourBotName (ID: 123456789)
 ```
 
-## Test the Bot
+## Usage
 
-Send a message in any channel where the bot is present. The bot will print the message payload to the console:
+Send a message in any channel where the bot is present:
 
 ```
-============================================================
-[DISCORD MESSAGE RECEIVED] 2024-06-10T12:00:00
-{
-  "message_id": 123456789,
-  "content": "Hello bot!",
-  "timestamp": "2024-06-10T12:00:00+00:00",
-  "author": {
-    "id": 987654321,
-    "username": "testuser",
-    "display_name": "TestUser",
-    "bot": false
-  },
-  "channel": {
-    "id": 111222333,
-    "name": "general",
-    "type": "text"
-  },
-  "guild": {
-    "id": 444555666,
-    "name": "My Server"
-  }
-}
-============================================================
+@reporting-bot compile 2026-06-10 2026-06-11
 ```
 
-## Important Notes
+The bot will:
+1. Reply with "perintah diterima, compiling reports..."
+2. Scan all messages in that channel from 2026-06-10 to 2026-06-11 (GMT+7, inclusive)
+3. Filter messages with image attachments and valid `id`, `sub-id`, `tanggal` format
+4. Generate PDFs per `tower-id`
+5. Upload the PDFs back to the channel
 
-- **No outgoing calls:** This is a strictly print-only receiver — no replies are sent to Discord.
-- **Skips bot messages:** The bot ignores messages from other bots to avoid loops.
-- **Direct messages (DMs):** The bot will also print DMs if it has the `message_content` intent.
-- **Image attachments:** When a message includes images, the bot prints the attachment metadata (filename, URL, dimensions, etc.) in the payload.
+If no matching messages are found, the bot will reply:
+```
+tidak ada chat tentang laporan proyek
+```
 
 ## Project Structure
 
@@ -92,14 +92,22 @@ Send a message in any channel where the bot is present. The bot will print the m
 discord-bot/
 ├── app/
 │   ├── __init__.py
-│   └── main.py          # Bot client & message listener
+│   ├── main.py              # Bot client & message listener
+│   ├── parser.py            # Command parsing & date conversion
+│   ├── message_filter.py    # Message fetching & validation
+│   ├── pdf_generator.py     # PDF generation with grid layout
+│   └── report_service.py    # Orchestration layer
 ├── tests/
 │   ├── __init__.py
-│   └── test_bot.py      # Unit tests
-├── .env                 # Environment variables (not tracked)
-├── .env.example         # Example env file
-├── requirements.txt     # Python dependencies
-└── README.md            # This file
+│   ├── test_bot.py          # Unit tests for main.py
+│   ├── test_parser.py       # Unit tests for parser.py
+│   ├── test_message_filter.py  # Unit tests for message_filter.py
+│   ├── test_pdf_generator.py  # Unit tests for pdf_generator.py
+│   └── test_report_service.py # Unit tests for report_service.py
+├── .env                     # Environment variables (not tracked)
+├── .env.example             # Example env file
+├── requirements.txt         # Python dependencies
+└── README.md                # This file
 ```
 
 ## Run Tests
@@ -108,13 +116,12 @@ discord-bot/
 python -m pytest tests/ -v
 ```
 
-## Troubleshooting
+## Important Notes
 
-**Bot not receiving messages?**
-- Verify the bot has the `MESSAGE CONTENT INTENT` enabled in the Developer Portal
-- Check that the bot is invited to the server with `View Channels` and `Read Message History` permissions
-- Make sure the bot has access to the specific channel you're testing in
-
-**Token not loading?**
-- Ensure `.env` is in the `discord-bot/` directory
-- The token should not be wrapped in quotes
+- **Date format**: All dates must be in `yyyy-mm-dd` format
+- **Timezone**: Dates are interpreted in GMT+7 (WIB)
+- **Inclusive range**: Both start and end dates are included
+- **Image attachments**: Only messages with image attachments are processed
+- **Message format**: Messages must contain `id:`, `sub-id:`, and `tanggal:` fields
+- **Skips bot messages**: The bot ignores messages from other bots to avoid loops
+- **Direct messages (DMs)**: The bot will also process DMs if it has the `message_content` intent
