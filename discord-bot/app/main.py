@@ -14,7 +14,7 @@ import discord
 # `python app/main.py` directly.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.parser import parse_compile_command
+from app.discord_util import parse_compile_command
 from app.report_service import compile_report
 
 # Load environment variables from .env file

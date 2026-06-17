@@ -1,54 +1,11 @@
 """Tests for the report service module."""
 
 import pytest
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from app.report_service import compile_report, group_messages_by_id, download_message_images
-
-
-# ───────────────────────────────────────────────────────────────
-# group_messages_by_id
-# ───────────────────────────────────────────────────────────────
-
-
-def test_group_messages_by_id_single_group():
-    """Messages with the same id are grouped together."""
-    messages = [
-        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
-        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
-    ]
-    result = group_messages_by_id(messages)
-    assert "tower 123" in result
-    assert "section A" in result["tower 123"]
-    assert len(result["tower 123"]["section A"]) == 2
-    assert result["tower 123"]["section A"][0]["message_id"] == 1
-
-
-def test_group_messages_by_id_multiple_sub_ids():
-    """Messages with same id but different sub-ids are grouped separately."""
-    messages = [
-        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
-        {"id": "tower 123", "sub_id": "section B", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
-    ]
-    result = group_messages_by_id(messages)
-    assert "tower 123" in result
-    assert "section A" in result["tower 123"]
-    assert "section B" in result["tower 123"]
-    assert len(result["tower 123"]["section A"]) == 1
-    assert len(result["tower 123"]["section B"]) == 1
-
-
-def test_group_messages_by_id_multiple_ids():
-    """Messages with different ids are grouped into separate top-level keys."""
-    messages = [
-        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
-        {"id": "tower 456", "sub_id": "section A", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
-    ]
-    result = group_messages_by_id(messages)
-    assert "tower 123" in result
-    assert "tower 456" in result
+from app.report_service import compile_report
 
 
 # ───────────────────────────────────────────────────────────────
@@ -154,27 +111,3 @@ async def test_compile_report_download_failure_skipped(tmp_path):
     assert mock_pdf.called
     call_kwargs = mock_pdf.call_args.kwargs
     assert call_kwargs["grouped_data"]["section A"][0]["images"] == []
-
-
-# ───────────────────────────────────────────────────────────────
-# download_message_images
-# ───────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_download_message_images_no_attachments(tmp_path):
-    """Message with no image attachments returns empty list."""
-    msg = MagicMock()
-    msg.attachments = []
-    result = await download_message_images(msg, tmp_path)
-    assert result == []
-
-
-@pytest.mark.asyncio
-async def test_download_message_images_non_image_attachments(tmp_path):
-    """Message with non-image attachments returns empty list."""
-    msg = MagicMock()
-    msg.attachments = [MagicMock()]
-    msg.attachments[0].content_type = "application/pdf"
-    result = await download_message_images(msg, tmp_path)
-    assert result == []

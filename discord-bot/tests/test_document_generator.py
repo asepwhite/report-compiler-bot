@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from PIL import Image
 
-from app.pdf_generator import generate_pdf
+from app.document_generator import generate_pdf
 
 
 @pytest.fixture
