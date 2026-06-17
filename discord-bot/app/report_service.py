@@ -1,14 +1,12 @@
 """Report service module: orchestrates fetch, filter, download, group, and PDF generation."""
 
-import asyncio
 from datetime import date
 from pathlib import Path
 
-import aiohttp
-
-from app.parser import gmt7_to_utc_range
-from app.message_filter import fetch_messages_in_range, is_valid_report_message
-from app.pdf_generator import generate_pdf
+from app.date_util import gmt7_to_utc_range
+from app.discord_util import fetch_messages_in_range, download_message_images
+from app.report_extractor import is_valid_report_message, group_messages_by_id
+from app.document_generator import generate_pdf
 
 
 async def compile_report(channel, start_date: date, end_date: date, temp_dir: Path) -> list[str]:
@@ -66,68 +64,3 @@ async def compile_report(channel, start_date: date, end_date: date, temp_dir: Pa
         pdf_paths.append(str(output_path))
 
     return pdf_paths
-
-
-def group_messages_by_id(valid_messages: list[dict]) -> dict:
-    """
-    Group valid messages by tower id, then by sub-id.
-
-    Returns
-    -------
-    dict
-        {id: {sub_id: [{"message_id": ..., "images": [local_path, ...]}]}}
-    """
-    grouped = {}
-    for parsed in valid_messages:
-        report_id = parsed["id"]
-        sub_id = parsed["sub_id"]
-        if report_id not in grouped:
-            grouped[report_id] = {}
-        if sub_id not in grouped[report_id]:
-            grouped[report_id][sub_id] = []
-        grouped[report_id][sub_id].append({
-            "message_id": parsed["message_id"],
-            "images": parsed.get("local_images", []),
-        })
-    return grouped
-
-
-async def download_message_images(message, temp_dir: Path) -> list[str]:
-    """
-    Download all image attachments from a Discord message.
-
-    Returns
-    -------
-    list[str]
-        List of local file paths for downloaded images.
-    """
-    image_attachments = [
-        att for att in message.attachments
-        if att.content_type and att.content_type.startswith("image/")
-    ]
-
-    if not image_attachments:
-        return []
-
-    local_paths = []
-    async with aiohttp.ClientSession() as session:
-        for att in image_attachments:
-            try:
-                local_path = await _download_image(session, att.url, att.filename, temp_dir)
-                local_paths.append(local_path)
-            except Exception:
-                # Skip failed downloads
-                pass
-
-    return local_paths
-
-
-async def _download_image(session, url: str, filename: str, temp_dir: Path) -> str:
-    """Download a single image from a URL."""
-    local_path = temp_dir / filename
-    async with session.get(url) as response:
-        response.raise_for_status()
-        content = await response.read()
-        with open(local_path, "wb") as f:
-            f.write(content)
-    return str(local_path)

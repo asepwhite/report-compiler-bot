@@ -1,10 +1,14 @@
-"""Tests for the message filter module."""
+"""Tests for the report extractor module."""
 
 import pytest
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
-from app.message_filter import is_valid_report_message, fetch_messages_in_range
+from app.report_extractor import (
+    is_valid_report_message,
+    parse_report_message,
+    group_messages_by_id,
+)
 
 
 # ───────────────────────────────────────────────────────────────
@@ -110,70 +114,99 @@ def test_tanggal_at_end_boundary():
 
 
 # ───────────────────────────────────────────────────────────────
-# fetch_messages_in_range
+# parse_report_message
 # ───────────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_fetch_messages_in_range():
-    """Fetch messages within a UTC datetime range."""
-    channel = MagicMock()
-    msg1 = MagicMock()
-    msg1.created_at = datetime(2026, 6, 10, 10, 0, 0, tzinfo=timezone.utc)
-    msg2 = MagicMock()
-    msg2.created_at = datetime(2026, 6, 11, 10, 0, 0, tzinfo=timezone.utc)
-    msg3 = MagicMock()
-    msg3.created_at = datetime(2026, 6, 11, 16, 59, 59, tzinfo=timezone.utc)
-
-    # Simulate history() async generator
-    async def mock_history(*, limit=None, before=None, after=None):
-        for msg in [msg1, msg2, msg3]:
-            yield msg
-
-    channel.history = mock_history
-
-    start = datetime(2026, 6, 9, 17, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 11, 16, 59, 59, tzinfo=timezone.utc)
-    result = await fetch_messages_in_range(channel, start, end)
-
-    assert result == [msg1, msg2, msg3]
+def test_parse_report_message_valid():
+    """Parse a valid report message with all three fields."""
+    content = """id: tower 123
+sub-id: section A
+tanggal: 2026-06-11"""
+    result = parse_report_message(content)
+    assert result is not None
+    assert result["id"] == "tower 123"
+    assert result["sub_id"] == "section A"
+    assert result["tanggal"] == date(2026, 6, 11)
 
 
-@pytest.mark.asyncio
-async def test_fetch_messages_in_range_empty():
-    """Fetch messages returns empty list when no messages."""
-    channel = MagicMock()
-
-    async def mock_history(*, limit=None, before=None, after=None):
-        return
-        yield  # Make it a generator
-
-    channel.history = mock_history
-
-    start = datetime(2026, 6, 9, 17, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 11, 16, 59, 59, tzinfo=timezone.utc)
-    result = await fetch_messages_in_range(channel, start, end)
-
-    assert result == []
+def test_parse_report_message_with_extra_whitespace():
+    """Extra spaces around colons should be tolerated."""
+    content = "id :  tower 123\nsub-id : section A\ntanggal:2026-06-11"
+    result = parse_report_message(content)
+    assert result is not None
+    assert result["id"] == "tower 123"
+    assert result["sub_id"] == "section A"
+    assert result["tanggal"] == date(2026, 6, 11)
 
 
-@pytest.mark.asyncio
-async def test_fetch_messages_in_range_filters_outside():
-    """Messages outside the UTC range are filtered out."""
-    channel = MagicMock()
-    msg_in = MagicMock()
-    msg_in.created_at = datetime(2026, 6, 10, 10, 0, 0, tzinfo=timezone.utc)
-    msg_out = MagicMock()
-    msg_out.created_at = datetime(2026, 6, 12, 10, 0, 0, tzinfo=timezone.utc)
+def test_parse_report_message_missing_id():
+    """Missing id field should return None."""
+    content = "sub-id: section A\ntanggal: 2026-06-11"
+    assert parse_report_message(content) is None
 
-    async def mock_history(*, limit=None, before=None, after=None):
-        for msg in [msg_in, msg_out]:
-            yield msg
 
-    channel.history = mock_history
+def test_parse_report_message_missing_sub_id():
+    """Missing sub-id field should return None."""
+    content = "id: tower 123\ntanggal: 2026-06-11"
+    assert parse_report_message(content) is None
 
-    start = datetime(2026, 6, 9, 17, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 11, 16, 59, 59, tzinfo=timezone.utc)
-    result = await fetch_messages_in_range(channel, start, end)
 
-    assert result == [msg_in]
+def test_parse_report_message_missing_tanggal():
+    """Missing tanggal field should return None."""
+    content = "id: tower 123\nsub-id: section A"
+    assert parse_report_message(content) is None
+
+
+def test_parse_report_message_invalid_tanggal():
+    """Invalid tanggal format should return None."""
+    content = "id: tower 123\nsub-id: section A\ntanggal: 11-06-2026"
+    assert parse_report_message(content) is None
+
+
+def test_parse_report_message_empty_content():
+    """Empty content should return None."""
+    assert parse_report_message("") is None
+
+
+# ───────────────────────────────────────────────────────────────
+# group_messages_by_id
+# ───────────────────────────────────────────────────────────────
+
+
+def test_group_messages_by_id_single_group():
+    """Messages with the same id are grouped together."""
+    messages = [
+        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
+        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
+    ]
+    result = group_messages_by_id(messages)
+    assert "tower 123" in result
+    assert "section A" in result["tower 123"]
+    assert len(result["tower 123"]["section A"]) == 2
+    assert result["tower 123"]["section A"][0]["message_id"] == 1
+
+
+def test_group_messages_by_id_multiple_sub_ids():
+    """Messages with same id but different sub-ids are grouped separately."""
+    messages = [
+        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
+        {"id": "tower 123", "sub_id": "section B", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
+    ]
+    result = group_messages_by_id(messages)
+    assert "tower 123" in result
+    assert "section A" in result["tower 123"]
+    assert "section B" in result["tower 123"]
+    assert len(result["tower 123"]["section A"]) == 1
+    assert len(result["tower 123"]["section B"]) == 1
+
+
+def test_group_messages_by_id_multiple_ids():
+    """Messages with different ids are grouped into separate top-level keys."""
+    messages = [
+        {"id": "tower 123", "sub_id": "section A", "tanggal": date(2026, 6, 10), "message_id": 1, "local_images": ["/tmp/img1.png"]},
+        {"id": "tower 456", "sub_id": "section A", "tanggal": date(2026, 6, 11), "message_id": 2, "local_images": ["/tmp/img2.png"]},
+    ]
+    result = group_messages_by_id(messages)
+    assert "tower 123" in result
+    assert "tower 456" in result

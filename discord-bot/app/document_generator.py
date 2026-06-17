@@ -1,4 +1,4 @@
-"""PDF generator module for creating report PDFs with image grids."""
+"""Document generator module for creating report PDFs with image grids."""
 
 from datetime import date
 from pathlib import Path
