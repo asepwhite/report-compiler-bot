@@ -1,10 +1,12 @@
 """Discord bot for compiling project report PDFs from channel messages."""
 
+import logging
 import os
 import sys
 import json
 import asyncio
 import tempfile
+import traceback
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,13 +16,23 @@ import discord
 # `python app/main.py` directly.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.discord_util import parse_compile_command
-from app.report_service import compile_report
-
-# Load environment variables from .env file
+# Load environment variables from .env file BEFORE importing app modules
+# that read env vars at module level.
 load_dotenv()
 
+from app.discord_util import parse_compile_command
+from app.report_service import compile_report
+from app.report_agent import run_report_agent, DateParseError, NoMessagesError, NoValidReportsError
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+
+logger = logging.getLogger(__name__)
 
 
 def format_attachment(attachment):
@@ -70,6 +82,51 @@ def print_message(payload):
     print("=" * 60)
 
 
+def _is_nl_report_request(content: str) -> bool:
+    """Detect if the message is a natural language report request."""
+    text = content.lower()
+    keywords = ["report", "laporan", "bikin", "buatkan", "tolong"]
+    return any(kw in text for kw in keywords)
+
+
+async def _handle_nl_report_command(message):
+    """Handle natural language report requests via the agent."""
+    ack_message = await message.reply("perintah diterima, sedang memproses laporan...")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_path = Path(tmp_dir)
+            pdf_paths = await run_report_agent(
+                channel=message.channel,
+                user_query=message.content,
+                temp_dir=temp_path,
+            )
+
+            # Upload all PDFs
+            files = [discord.File(path) for path in pdf_paths]
+            await message.reply(files=files)
+
+            # Update ack message
+            await ack_message.edit(
+                content=f"✅ {len(pdf_paths)} laporan berhasil dibuat!"
+            )
+
+    except DateParseError as e:
+        logger.error("DateParseError: %s", e.message)
+        await ack_message.edit(content=e.message)
+    except NoMessagesError as e:
+        logger.error("NoMessagesError: %s", e.message)
+        await ack_message.edit(content=e.message)
+    except NoValidReportsError as e:
+        logger.error("NoValidReportsError: %s", e.message)
+        await ack_message.edit(content=e.message)
+    except Exception as e:
+        logger.exception("Unexpected error in NL report agent: %s", e)
+        await ack_message.edit(
+            content="Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+        )
+
+
 def create_bot():
     """Create and configure the Discord bot instance."""
     intents = discord.Intents.default()
@@ -98,13 +155,17 @@ def create_bot():
         if bot.user not in message.mentions:
             return
 
-        # Try to parse the compile command
+        # Try to parse the compile command first
         dates = parse_compile_command(message.content)
-        if dates is None:
+        if dates is not None:
+            start_date, end_date = dates
+            await _handle_compile_command(message, start_date, end_date)
             return
 
-        start_date, end_date = dates
-        await _handle_compile_command(message, start_date, end_date)
+        # Try natural language report request
+        if _is_nl_report_request(message.content):
+            await _handle_nl_report_command(message)
+            return
 
     return bot
 
