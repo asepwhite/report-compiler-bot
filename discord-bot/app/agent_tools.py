@@ -10,6 +10,7 @@ from langchain.tools import tool
 from app.date_util import gmt7_to_utc_range
 from app.discord_util import fetch_messages_in_range, download_message_images
 from app.report_extractor import is_valid_report_message, group_messages_by_id
+from app.image_metadata_extractor import extract_image_metadata
 from app.document_generator import generate_pdf
 
 
@@ -92,8 +93,9 @@ def process_messages_tool(
     """
     Process Discord messages to extract valid report entries.
 
-    Filters messages by report date range, validates report format,
-    downloads images, and returns structured data.
+    Validates messages have image attachments, downloads images,
+    extracts metadata from each image using Gemini vision,
+    filters by report date range, and returns structured data.
 
     Parameters
     ----------
@@ -123,13 +125,13 @@ async def process_messages(
     """
     Async implementation of process_messages_tool.
 
-    Validates messages, filters by report date range, downloads images,
+    Validates messages have image attachments, downloads images,
+    extracts metadata from each image, filters by report date range,
     and returns minimal structured data.
     """
     logger.info("Processing %d messages for report range %s to %s",
                 len(messages), report_start_date, report_end_date)
 
-    # We need to reconstruct mock-like message objects for the existing functions
     class MockAttachment:
         def __init__(self, att_dict: dict):
             self.id = att_dict["id"]
@@ -146,15 +148,47 @@ async def process_messages(
     valid_entries = []
     for msg_dict in messages:
         mock_msg = MockMessage(msg_dict)
-        parsed = is_valid_report_message(mock_msg, report_start_date, report_end_date)
-        if parsed:
-            local_images = await download_message_images(mock_msg, temp_dir)
+
+        # 1. Lightweight validation: has images?
+        if not is_valid_report_message(mock_msg):
+            continue
+
+        # 2. Download all image attachments
+        local_images = await download_message_images(mock_msg, temp_dir)
+
+        # 3. Extract metadata from EACH image individually
+        for img_path in local_images:
+            metadata = await extract_image_metadata(Path(img_path))
+
+            if metadata is None:
+                logger.warning(
+                    "Image skipped: metadata extraction failed",
+                    extra={
+                        "message_id": mock_msg.id,
+                        "image": img_path,
+                    },
+                )
+                continue
+
+            # 4. Check report date range
+            if not (report_start_date <= metadata.report_date <= report_end_date):
+                logger.info(
+                    "Image skipped: date out of range",
+                    extra={
+                        "message_id": mock_msg.id,
+                        "image": img_path,
+                        "extracted_date": metadata.report_date.isoformat(),
+                    },
+                )
+                continue
+
+            # 5. Create one entry per valid image
             valid_entries.append({
-                "tower_id": parsed["id"],
-                "sub_id": parsed["sub_id"],
-                "report_date": parsed["tanggal"].isoformat(),
+                "tower_id": metadata.tower_id,
+                "sub_id": metadata.sub_id,
+                "report_date": metadata.report_date.isoformat(),
                 "message_id": mock_msg.id,
-                "images": local_images,
+                "images": [img_path],
             })
 
     logger.info("Found %d valid report entries", len(valid_entries))
