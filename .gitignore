@@ -18,7 +18,8 @@ build/
 .env.local
 .env.development
 .env.production
-.opencode/
+.opencode/*
 
 photo-sample/
 graphify-out/
+
