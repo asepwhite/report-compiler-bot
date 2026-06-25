@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from app.intent_classifier import IntentClassification
 from app.report_agent import run_report_agent
 
 
@@ -27,14 +28,16 @@ async def test_run_report_agent_success(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="bikin report 10 juni 2026",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="bikin report 10 juni 2026",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "report"
     assert result["pdf_paths"] == pdf_paths
@@ -54,14 +57,16 @@ async def test_run_report_agent_pdf_paths_in_dict(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="bikin report 10 juni 2026",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="bikin report 10 juni 2026",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "report"
     assert result["pdf_paths"] == pdf_paths
@@ -80,14 +85,16 @@ async def test_run_report_agent_no_paths_returns_error(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="random text",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="random text",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "error"
     assert "tidak ada pesan" in result["message"]
@@ -106,14 +113,16 @@ async def test_run_report_agent_empty_response_returns_error(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="test",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="test",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "error"
     assert "Gagal membuat laporan" in result["message"]
@@ -131,14 +140,16 @@ async def test_run_report_agent_greeting_no_tools(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="halo bot",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="greeting", confidence=0.92, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="halo bot",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "greeting"
     assert "Halo!" in result["message"]
@@ -156,14 +167,100 @@ async def test_run_report_agent_greeting_list_content(tmp_path):
         ]
     }
 
-    with patch("app.report_agent.create_react_agent", return_value=mock_agent):
-        with patch("app.report_agent.create_llm", return_value=MagicMock()):
-            with patch("app.report_agent.create_agent_tools", return_value=[]):
-                result = await run_report_agent(
-                    channel=channel,
-                    user_query="selamat sore",
-                    temp_dir=tmp_path,
-                )
+    intent = IntentClassification(intent="greeting", confidence=0.92, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="selamat sore",
+                        temp_dir=tmp_path,
+                    )
 
     assert result["type"] == "greeting"
     assert "Selamat sore!" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_off_topic_blocked(tmp_path):
+    """High-confidence off-topic queries are blocked before the agent runs."""
+    channel = MagicMock()
+
+    intent = IntentClassification(
+        intent="off_topic",
+        confidence=0.88,
+        reasoning="Pengguna bertanya tentang pemrograman",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        # Agent should never be created or invoked
+        with patch("app.report_agent.create_react_agent") as mock_create_agent:
+            result = await run_report_agent(
+                channel=channel,
+                user_query="apa itu Python",
+                temp_dir=tmp_path,
+            )
+
+    assert result["type"] == "off_topic"
+    assert "hanya bisa membantu dengan pembuatan laporan" in result["message"]
+    mock_create_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_mixed_intent_blocked(tmp_path):
+    """Mixed-intent (report + off-topic question) is blocked before the agent runs."""
+    channel = MagicMock()
+
+    intent = IntentClassification(
+        intent="off_topic",
+        confidence=0.85,
+        reasoning="Pengguna meminta laporan tetapi juga bertanya jarak antar kota",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent") as mock_create_agent:
+            result = await run_report_agent(
+                channel=channel,
+                user_query=(
+                    "om tolong bantu bikin laporan @reporting-bot , "
+                    "tapi gw harus tau dulu jarak dari jakarta ke bandung"
+                ),
+                temp_dir=tmp_path,
+            )
+
+    assert result["type"] == "off_topic"
+    assert "hanya bisa membantu dengan pembuatan laporan" in result["message"]
+    mock_create_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_low_confidence_off_topic_allowed(tmp_path):
+    """Low-confidence off-topic is overridden to report_request and agent runs."""
+    channel = MagicMock()
+    pdf_paths = [str(tmp_path / "report.pdf")]
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content=f'["{pdf_paths[0]}"]'),
+        ]
+    }
+
+    # classify_intent returns off_topic but with low confidence → overridden to report_request
+    intent = IntentClassification(
+        intent="report_request",
+        confidence=0.5,
+        reasoning="Dianggap report_request karena confidence off_topic (0.50) di bawah threshold (0.6)",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="tolong bantu",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "report"
+    assert result["pdf_paths"] == pdf_paths

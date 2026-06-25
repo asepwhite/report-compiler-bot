@@ -9,10 +9,16 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import create_react_agent
 
 from app.agent_tools import create_agent_tools
+from app.intent_classifier import classify_intent
 from app.llm import create_llm
 
 
 logger = logging.getLogger(__name__)
+
+_OFF_TOPIC_REFUSAL = (
+    "Maaf, saya hanya bisa membantu dengan pembuatan laporan. "
+    "Ada yang bisa saya bantu terkait laporan?"
+)
 
 
 _SYSTEM_PROMPT = """\
@@ -120,11 +126,18 @@ async def run_report_agent(
     -------
     dict
         One of:
+        - {"type": "off_topic", "message": "..."}
         - {"type": "greeting", "message": "..."}
         - {"type": "report",   "pdf_paths": [...]}
         - {"type": "error",    "message": "..."}
     """
     logger.info("Starting report agent for query: %s", user_query)
+
+    # ── Guardrail: model-based intent classification ──
+    intent_result = classify_intent(user_query)
+    if intent_result.intent == "off_topic":
+        logger.info("Guardrail blocked off-topic query (confidence=%.2f)", intent_result.confidence)
+        return {"type": "off_topic", "message": _OFF_TOPIC_REFUSAL}
 
     model = create_llm()
     tools = create_agent_tools(channel, temp_dir)

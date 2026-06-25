@@ -131,6 +131,10 @@ async def _handle_nl_report_command(message):
             temp_dir=temp_path,
         )
 
+        if result["type"] == "off_topic":
+            await message.reply(result["message"])
+            return
+
         if result["type"] == "greeting":
             await message.reply(result["message"])
             return
