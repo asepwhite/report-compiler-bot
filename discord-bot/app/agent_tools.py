@@ -6,7 +6,6 @@ import logging
 from datetime import date
 from pathlib import Path
 
-from langchain.tools import tool
 from langchain_core.tools import StructuredTool
 
 from app.date_util import gmt7_to_utc_range
@@ -19,40 +18,13 @@ from app.document_generator import generate_pdf
 logger = logging.getLogger(__name__)
 
 
-@tool
-def retrieve_messages_tool(
-    discord_start_date: str,
-    discord_end_date: str,
-    channel,
-) -> str:
-    """
-    Retrieve all Discord messages from a channel within a date range.
-
-    Parameters
-    ----------
-    discord_start_date : str
-        Start date in ISO format (YYYY-MM-DD), inclusive.
-    discord_end_date : str
-        End date in ISO format (YYYY-MM-DD), inclusive.
-    channel : discord.TextChannel
-        The Discord channel to fetch messages from.
-
-    Returns
-    -------
-    str
-        JSON string containing a list of message dicts with keys:
-        message_id, content, timestamp, author, attachments.
-    """
-    raise NotImplementedError("This tool must be called via its async counterpart.")
-
-
 async def retrieve_messages(
     discord_start_date: date,
     discord_end_date: date,
     channel,
 ) -> list[dict]:
     """
-    Async implementation of retrieve_messages_tool.
+    Retrieve Discord messages from a channel within a date range.
 
     Fetches messages from the given channel within the inclusive date range.
     """
@@ -85,39 +57,6 @@ async def retrieve_messages(
     return messages
 
 
-@tool
-def process_messages_tool(
-    messages_json: str,
-    report_start_date: str,
-    report_end_date: str,
-    temp_dir_path: str,
-) -> str:
-    """
-    Process Discord messages to extract valid report entries.
-
-    Validates messages have image attachments, downloads images,
-    extracts metadata from each image using Gemini vision,
-    filters by report date range, and returns structured data.
-
-    Parameters
-    ----------
-    messages_json : str
-        JSON string of Discord messages (output from retrieve_messages_tool).
-    report_start_date : str
-        Report start date in ISO format (YYYY-MM-DD), inclusive.
-    report_end_date : str
-        Report end date in ISO format (YYYY-MM-DD), inclusive.
-    temp_dir_path : str
-        Path to temporary directory for downloading images.
-
-    Returns
-    -------
-    str
-        JSON string of list of objects with keys: tower_id, sub_id, report_date.
-    """
-    raise NotImplementedError("This tool must be called via its async counterpart.")
-
-
 async def process_messages(
     messages: list[dict],
     report_start_date: date,
@@ -125,7 +64,7 @@ async def process_messages(
     temp_dir: Path,
 ) -> list[dict]:
     """
-    Async implementation of process_messages_tool.
+    Process Discord messages to extract valid report entries.
 
     Validates messages have image attachments, downloads images,
     extracts metadata from each image, filters by report date range,
@@ -197,35 +136,6 @@ async def process_messages(
     return valid_entries
 
 
-@tool
-def generate_pdf_reports_tool(
-    processed_data_json: str,
-    temp_dir_path: str,
-    report_start_date: str,
-    report_end_date: str,
-) -> str:
-    """
-    Generate PDF reports from processed message data.
-
-    Parameters
-    ----------
-    processed_data_json : str
-        JSON string of processed data (output from process_messages_tool).
-    temp_dir_path : str
-        Path to temporary directory for output PDFs.
-    report_start_date : str
-        Report start date in ISO format (YYYY-MM-DD), for PDF title.
-    report_end_date : str
-        Report end date in ISO format (YYYY-MM-DD), for PDF title.
-
-    Returns
-    -------
-    str
-        JSON string of list of generated PDF file paths.
-    """
-    raise NotImplementedError("This tool must be called via its sync counterpart.")
-
-
 def generate_pdf_reports(
     processed_data: list[dict],
     temp_dir: Path,
@@ -233,7 +143,7 @@ def generate_pdf_reports(
     report_end_date: date,
 ) -> list[str]:
     """
-    Sync implementation of generate_pdf_reports_tool.
+    Generate PDF reports from processed message data.
 
     Groups data by tower_id and sub_id, then generates one PDF per tower_id.
     """
