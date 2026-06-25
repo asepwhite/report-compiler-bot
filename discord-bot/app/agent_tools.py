@@ -171,14 +171,15 @@ async def process_and_filter_messages(
     tower_numbers: list[str] | None,
     roadways: list[str] | None,
     temp_dir: Path,
-) -> list[dict]:
+) -> dict:
     """
     Process Discord messages from file paths to extract valid report entries.
 
     Reads messages from the provided JSON file paths, combines them,
-    processes in batches of 50 messages, downloads images,
+    processes all messages in parallel, downloads images,
     extracts metadata from each image (with configurable concurrency limit),
-    filters by tower number and roadway, and returns structured data.
+    filters by tower number and roadway, writes entries to a file,
+    and returns the file path and entry count.
     """
     file_paths = json.loads(file_paths_json)
     if not isinstance(file_paths, list):
@@ -210,7 +211,13 @@ async def process_and_filter_messages(
 
     if not all_messages:
         logger.info("No messages to process")
-        return []
+        # Clean up consumed message files even when empty
+        for filename in file_paths:
+            fp = temp_dir / filename
+            if fp.exists():
+                fp.unlink()
+                logger.debug("Cleaned up message file: %s", fp)
+        return {"file_path": "", "entry_count": 0}
 
     # Process all messages concurrently (Gemini semaphore throttles API calls)
     total_messages = len(all_messages)
@@ -230,7 +237,20 @@ async def process_and_filter_messages(
         len(all_valid_entries),
         total_messages,
     )
-    return all_valid_entries
+
+    # Write entries to file and clean up consumed message files
+    output_filename = "processed_entries.json"
+    output_path = temp_dir / output_filename
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(all_valid_entries, f)
+
+    for filename in file_paths:
+        fp = temp_dir / filename
+        if fp.exists():
+            fp.unlink()
+            logger.debug("Cleaned up message file: %s", fp)
+
+    return {"file_path": output_filename, "entry_count": len(all_valid_entries)}
 
 
 def _slugify(value: str | None) -> str:
@@ -244,14 +264,30 @@ def _slugify(value: str | None) -> str:
 
 
 def generate_pdf_reports(
-    processed_data: list[dict],
+    processed_data_file_path: str,
     temp_dir: Path,
 ) -> list[str]:
     """
-    Generate PDF reports from processed message data.
+    Generate PDF reports from processed message data file.
 
-    Groups data by report_date, tower_id, and roadway, then generates one PDF per group.
+    Reads entries from the provided JSON file, groups by report_date, tower_id, and roadway,
+    then generates one PDF per group. Cleans up the processed entries file when done.
     """
+    file_path = temp_dir / processed_data_file_path
+    if not file_path.exists():
+        logger.warning("Processed entries file not found: %s", file_path)
+        return []
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            processed_data = json.load(f)
+    except json.JSONDecodeError:
+        logger.warning("Invalid JSON in processed entries file: %s", file_path)
+        return []
+    except Exception:
+        logger.exception("Failed to read processed entries file: %s", file_path)
+        return []
+
     logger.info("Generating PDFs for %d processed entries", len(processed_data))
 
     # Group by (report_date, tower_id, roadway) -> sub_id -> list of {message_id, images}
@@ -289,6 +325,13 @@ def generate_pdf_reports(
             output_path=str(output_path),
         )
         pdf_paths.append(str(output_path))
+
+    # Clean up processed entries file after PDF generation
+    try:
+        file_path.unlink()
+        logger.debug("Cleaned up processed entries file: %s", file_path)
+    except Exception:
+        logger.warning("Failed to clean up processed entries file: %s", file_path)
 
     logger.info("Generated %d PDFs: %s", len(pdf_paths), pdf_paths)
     return pdf_paths
@@ -369,10 +412,10 @@ def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
         """Process Discord messages from file paths to extract valid report entries."""
         tower_numbers = json.loads(tower_numbers_json) if tower_numbers_json else None
         roadways = json.loads(roadways_json) if roadways_json else None
-        entries = await process_and_filter_messages(
+        result = await process_and_filter_messages(
             file_paths_json, tower_numbers, roadways, temp_dir
         )
-        return json.dumps(entries)
+        return json.dumps(result)
 
     tools.append(StructuredTool.from_function(
         coroutine=_process,
@@ -382,20 +425,18 @@ def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
             "Reads messages from JSON file paths, validates images, downloads images, "
             "extracts metadata from each image using Gemini vision (concurrent, "
             "rate-limited by GEMINI_MAX_CONCURRENT env var), "
-            "filters by tower number and roadway. "
+            "filters by tower number and roadway, writes entries to a file. "
             "Input: file_paths_json (JSON string of list of file path strings), "
             "tower_numbers_json (JSON string of list[str] or 'null'), "
             "roadways_json (JSON string of list[str] or 'null'). "
-            "Output: JSON string of list of objects with keys: "
-            "tower_id, sub_id, report_date, roadway, images."
+            "Output: JSON with file_path and entry_count."
         ),
     ))
 
-    async def _generate(processed_data_json: str) -> str:
-        """Generate PDF reports from processed message data."""
+    async def _generate(processed_data_file_path: str) -> str:
+        """Generate PDF reports from processed message data file."""
         def _sync() -> str:
-            data = json.loads(processed_data_json)
-            paths = generate_pdf_reports(data, temp_dir)
+            paths = generate_pdf_reports(processed_data_file_path, temp_dir)
             return json.dumps(paths)
         return await asyncio.to_thread(_sync)
 
@@ -404,9 +445,9 @@ def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
         name="generate_pdf_reports",
         description=(
             "Generate PDF reports from processed message data. "
-            "Groups data by report_date, tower_id, and roadway, "
+            "Reads entries from a JSON file, groups by report_date, tower_id, and roadway, "
             "then generates one PDF per group. "
-            "Input: processed_data_json (str). "
+            "Input: processed_data_file_path (str, e.g. 'processed_entries.json'). "
             "Output: JSON string of list of generated PDF file paths."
         ),
     ))

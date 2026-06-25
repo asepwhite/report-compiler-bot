@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.agent_tools import process_and_filter_messages, retrieve_messages
+from app.agent_tools import process_and_filter_messages, retrieve_messages, generate_pdf_reports
 
 
 @pytest.fixture
@@ -57,7 +57,6 @@ def sample_messages():
 @pytest.mark.asyncio
 async def test_retrieve_messages_writes_file(temp_dir):
     """retrieve_messages writes stripped messages to a file and returns file_path."""
-    # Create mock messages
     mock_msg1 = MagicMock()
     mock_msg1.id = 1
     mock_att1 = MagicMock()
@@ -87,11 +86,9 @@ async def test_retrieve_messages_writes_file(temp_dir):
     assert "message_count" in result
     assert result["message_count"] == 2
 
-    # Verify file was written
     file_path = temp_dir / result["file_path"]
     assert file_path.exists()
 
-    # Verify stripped content (no author, content, timestamp)
     with open(file_path, "r") as f:
         data = json.load(f)
     assert len(data) == 2
@@ -103,11 +100,10 @@ async def test_retrieve_messages_writes_file(temp_dir):
 
 
 @pytest.mark.asyncio
-async def test_process_and_filter_messages_reads_from_file(temp_dir, sample_messages):
-    """process_and_filter_messages reads messages from file paths."""
+async def test_process_and_filter_messages_writes_file(temp_dir, sample_messages):
+    """process_and_filter_messages writes entries to file and returns file_path."""
     from app.image_metadata_extractor import NormalizedImageMetadata
 
-    # Write sample messages to a file
     file_path = temp_dir / "messages_2026-06-10_2026-06-10.json"
     with open(file_path, "w") as f:
         json.dump(sample_messages, f)
@@ -159,9 +155,22 @@ async def test_process_and_filter_messages_reads_from_file(temp_dir, sample_mess
                 temp_dir=temp_dir,
             )
 
-    assert len(result) == 3
-    tower_ids = {r["tower_id"] for r in result}
+    assert "file_path" in result
+    assert "entry_count" in result
+    assert result["entry_count"] == 3
+    assert result["file_path"] == "processed_entries.json"
+
+    # Verify the output file exists and contains valid entries
+    output_path = temp_dir / result["file_path"]
+    assert output_path.exists()
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert len(entries) == 3
+    tower_ids = {e["tower_id"] for e in entries}
     assert tower_ids == {"Tower 123", "Tower 345"}
+
+    # Verify input message file was cleaned up
+    assert not file_path.exists()
 
 
 @pytest.mark.asyncio
@@ -217,8 +226,11 @@ async def test_process_and_filter_messages_filter_by_tower(temp_dir, sample_mess
                 temp_dir=temp_dir,
             )
 
-    assert len(result) == 2
-    assert all(r["tower_id"] == "Tower 123" for r in result)
+    assert result["entry_count"] == 2
+    output_path = temp_dir / result["file_path"]
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert all(e["tower_id"] == "Tower 123" for e in entries)
 
 
 @pytest.mark.asyncio
@@ -277,8 +289,11 @@ async def test_process_and_filter_messages_filter_by_roadway(temp_dir, sample_me
                 temp_dir=temp_dir,
             )
 
-    assert len(result) == 2
-    assert all(r["roadway"] == "Jalur Jakarta - Bandung" for r in result)
+    assert result["entry_count"] == 2
+    output_path = temp_dir / result["file_path"]
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert all(e["roadway"] == "Jalur Jakarta - Bandung" for e in entries)
 
 
 @pytest.mark.asyncio
@@ -330,25 +345,29 @@ async def test_process_and_filter_messages_skip_no_roadway_when_filtering(temp_d
                 temp_dir=temp_dir,
             )
 
-    assert len(result) == 1
-    assert result[0]["roadway"] == "Jalur Jakarta - Bandung"
+    assert result["entry_count"] == 1
+    output_path = temp_dir / result["file_path"]
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert entries[0]["roadway"] == "Jalur Jakarta - Bandung"
 
 
 @pytest.mark.asyncio
 async def test_process_and_filter_messages_empty_messages(temp_dir):
-    """Empty message list returns empty results."""
+    """Empty message list returns empty file_path and zero entry_count."""
     result = await process_and_filter_messages(
         json.dumps([]),
         tower_numbers=None,
         roadways=None,
         temp_dir=temp_dir,
     )
-    assert result == []
+    assert result["file_path"] == ""
+    assert result["entry_count"] == 0
 
 
 @pytest.mark.asyncio
 async def test_process_and_filter_messages_no_valid_images(temp_dir, sample_messages):
-    """When all images fail metadata extraction, return empty results."""
+    """When all images fail metadata extraction, returns zero entries but writes file."""
     file_path = temp_dir / "messages_2026-06-10_2026-06-10.json"
     with open(file_path, "w") as f:
         json.dump(sample_messages, f)
@@ -376,27 +395,31 @@ async def test_process_and_filter_messages_no_valid_images(temp_dir, sample_mess
                 temp_dir=temp_dir,
             )
 
-    assert result == []
+    assert result["entry_count"] == 0
+    output_path = temp_dir / result["file_path"]
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert entries == []
 
 
 @pytest.mark.asyncio
 async def test_process_and_filter_messages_handles_missing_file(temp_dir):
-    """Missing files are skipped gracefully."""
+    """Missing files are skipped gracefully, returns empty result."""
     result = await process_and_filter_messages(
         json.dumps(["nonexistent_file.json"]),
         tower_numbers=None,
         roadways=None,
         temp_dir=temp_dir,
     )
-    assert result == []
+    assert result["file_path"] == ""
+    assert result["entry_count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_process_and_filter_messages_batches_correctly(temp_dir):
-    """Messages are processed in batches of 50."""
+async def test_process_and_filter_messages_parallel_all_messages(temp_dir):
+    """All messages are processed in parallel."""
     from app.image_metadata_extractor import NormalizedImageMetadata
 
-    # Create 120 messages (should be 3 batches: 50 + 50 + 20)
     messages = []
     for i in range(120):
         messages.append({
@@ -415,7 +438,6 @@ async def test_process_and_filter_messages_batches_correctly(temp_dir):
     with open(file_path, "w") as f:
         json.dump(messages, f)
 
-    # Create fake image files
     fake_paths = [str(temp_dir / f"fake_{i}.png") for i in range(120)]
     for fp in fake_paths:
         Path(fp).write_bytes(b"fake")
@@ -442,4 +464,41 @@ async def test_process_and_filter_messages_batches_correctly(temp_dir):
                 temp_dir=temp_dir,
             )
 
-    assert len(result) == 120
+    assert result["entry_count"] == 120
+    output_path = temp_dir / result["file_path"]
+    with open(output_path, "r") as f:
+        entries = json.load(f)
+    assert len(entries) == 120
+
+
+def test_generate_pdf_reports_reads_from_file(temp_dir):
+    """generate_pdf_reads entries from a file path and cleans up after."""
+    # Create processed entries file
+    entries = [
+        {
+            "tower_id": "Tower 123",
+            "sub_id": "Section atas",
+            "report_date": "2026-06-10",
+            "roadway": "Jalur Jakarta - Bandung",
+            "message_id": 1,
+            "images": [],
+        }
+    ]
+    processed_file = temp_dir / "processed_entries.json"
+    with open(processed_file, "w") as f:
+        json.dump(entries, f)
+
+    result = generate_pdf_reports("processed_entries.json", temp_dir)
+
+    assert len(result) == 1
+    assert result[0].endswith(".pdf")
+    assert Path(result[0]).exists()
+
+    # Verify processed entries file was cleaned up
+    assert not processed_file.exists()
+
+
+def test_generate_pdf_reports_missing_file(temp_dir):
+    """Missing processed entries file returns empty list."""
+    result = generate_pdf_reports("nonexistent.json", temp_dir)
+    assert result == []
