@@ -27,20 +27,22 @@ class _ReportPDF(FPDF):
 
 def generate_pdf(
     report_id: str,
-    start_date: date,
-    end_date: date,
+    report_date: date,
+    roadway: str | None,
     grouped_data: dict,
     output_path: str,
 ):
     """
-    Generate a PDF report for a single tower id.
+    Generate a PDF report for a single (tower_id, report_date, roadway) group.
 
     Parameters
     ----------
     report_id : str
-        The tower id (e.g. "tower 123").
-    start_date, end_date : date
-        The inclusive report date range.
+        The tower id (e.g. "Tower 123").
+    report_date : date
+        The report date from photo metadata.
+    roadway : str | None
+        The roadway (e.g. "Jalur Purwakarta - Banyuwangi"), or None.
     grouped_data : dict
         Mapping of sub_id -> list of message dicts.
         Each message dict has keys: "message_id", "images" (list of local file paths).
@@ -53,7 +55,10 @@ def generate_pdf(
 
     # ── Title ──
     pdf.set_font("Helvetica", "B", 16)
-    title = f"Progress report {report_id} - {start_date} - {end_date}"
+    if roadway:
+        title = f"Progress report {report_id} - {roadway} - {report_date}"
+    else:
+        title = f"Progress report {report_id} - {report_date}"
     pdf.cell(0, 12, title, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.ln(4)
 
