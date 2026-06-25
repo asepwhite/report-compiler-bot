@@ -51,31 +51,16 @@ def _cleanup_stale_tmp():
 
 
 def _create_temp_dir(message_id: int) -> Path:
-    """Create a unique temporary subdirectory for a single report request."""
+    """Create a unique temporary directory for a single report request."""
     tmp_base = _get_tmp_base()
     tmp_base.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    temp_path = tmp_base / f"report_{timestamp}_{message_id}"
-    temp_path.mkdir(parents=True, exist_ok=True)
-    return temp_path
-
-
-def format_attachment(attachment):
-    """Extract metadata from a Discord attachment into a serializable dict."""
-    return {
-        "id": attachment.id,
-        "filename": attachment.filename,
-        "url": attachment.url,
-        "proxy_url": attachment.proxy_url,
-        "content_type": attachment.content_type,
-        "size": attachment.size,
-        "width": attachment.width,
-        "height": attachment.height,
-    }
+    temp_dir = tmp_base / f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{message_id}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
 
 
 def format_message_payload(message):
-    """Extract relevant fields from a Discord message into a serializable dict."""
+    """Format a Discord message into a JSON-serializable dict."""
     return {
         "message_id": message.id,
         "content": message.content,
@@ -83,19 +68,27 @@ def format_message_payload(message):
         "author": {
             "id": message.author.id,
             "username": message.author.name,
-            "display_name": getattr(message.author, "display_name", None),
+            "display_name": message.author.display_name,
             "bot": message.author.bot,
         },
         "channel": {
             "id": message.channel.id,
-            "name": getattr(message.channel, "name", None),
+            "name": message.channel.name,
             "type": str(message.channel.type),
         },
         "guild": {
-            "id": message.guild.id if message.guild else None,
-            "name": message.guild.name if message.guild else None,
+            "id": message.guild.id,
+            "name": message.guild.name,
         },
-        "attachments": [format_attachment(att) for att in message.attachments],
+        "attachments": [
+            {
+                "id": att.id,
+                "filename": att.filename,
+                "url": att.url,
+                "content_type": att.content_type,
+            }
+            for att in message.attachments
+        ],
     }
 
 
@@ -122,13 +115,22 @@ def _is_bot_mentioned(message, bot_user) -> bool:
 async def _handle_nl_report_command(message):
     """Handle any bot mention by delegating to the ReAct agent."""
     temp_path = None
+    ack_message = None
 
     try:
         temp_path = _create_temp_dir(message.id)
+
+        async def send_ack():
+            nonlocal ack_message
+            ack_message = await message.reply(
+                "⏳ Sedang memproses laporan, mohon tunggu..."
+            )
+
         result = await run_report_agent(
             channel=message.channel,
             user_query=message.content,
             temp_dir=temp_path,
+            send_ack=send_ack,
         )
 
         if result["type"] == "off_topic":
@@ -140,23 +142,31 @@ async def _handle_nl_report_command(message):
             return
 
         if result["type"] == "error":
-            await message.reply(result["message"])
+            if ack_message:
+                await ack_message.edit(content=f"❌ {result['message']}")
+            else:
+                await message.reply(result["message"])
             return
 
         if result["type"] == "report":
-            ack_message = await message.reply("perintah diterima, sedang memproses laporan...")
             files = [discord.File(path) for path in result["pdf_paths"]]
             await message.reply(files=files)
-            await ack_message.edit(
-                content=f"✅ {len(result['pdf_paths'])} laporan berhasil dibuat!"
-            )
+            if ack_message:
+                await ack_message.edit(
+                    content=f"✅ {len(result['pdf_paths'])} laporan berhasil dibuat!"
+                )
             return
 
     except Exception as e:
         logger.exception("Unexpected error in NL report agent: %s", e)
-        await message.reply(
-            "Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
-        )
+        if ack_message:
+            await ack_message.edit(
+                content="Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+            )
+        else:
+            await message.reply(
+                "Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+            )
     finally:
         if temp_path and temp_path.exists():
             try:

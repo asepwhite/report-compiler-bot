@@ -22,17 +22,25 @@ class RawImageMetadata(BaseModel):
     """Raw extraction output from Gemini vision."""
 
     date_text: str = Field(
-        description="Date text exactly as shown, e.g. 'Sabtu, 23 Mei 2026' or '05/31/2026'"
+        description="Date text exactly as shown, e.g. 'Sabtu, 23 Mei 2026' or '2026-06-25'"
     )
     tower_id_text: str = Field(
         description=(
             "Tower identifier text exactly as shown. "
-            "Examples: 'T.495', 'T - 495', 'Tower 500', 'Tower 500 cimahi', "
-            "'Tower 500 - depok, jawabarat'"
+            "Examples: 'T.495', 'T - 495', 'Tower 500', 'Tower: 567'"
+        )
+    )
+    roadway_text: str = Field(
+        description=(
+            "Roadway text exactly as shown, starting with 'Jalur:'. "
+            "May span multiple lines. Example: 'Jalur: Purwakarta - Banyuwangi'"
         )
     )
     section_text: str = Field(
-        description="Section text exactly as shown, e.g. 'Section: Mid'"
+        description="Section text exactly as shown, e.g. 'Section: Mid' or 'Section: Atas'"
+    )
+    measurement_tools_text: str = Field(
+        description="Measurement tools text exactly as shown, e.g. 'Alat ukur'"
     )
 
 
@@ -42,6 +50,8 @@ class NormalizedImageMetadata(BaseModel):
     tower_id: str
     sub_id: str
     report_date: date
+    roadway: Optional[str] = None
+    measurement_tools: Optional[str] = None
     raw_text: str
 
 
@@ -50,10 +60,9 @@ def normalize_tower_id(raw: str) -> Optional[str]:
     Normalize tower ID variations to 'Tower {number}'.
 
     Handles formats like:
-      - T.495, T - 495, Tower 500
-      - Tower 500 cimahi, Tower 500 - depok, jawabarat
+      - T.495, T - 495, Tower 500, Tower: 567
     """
-    pattern = r"(?:tower|t)[\s.\-]*(\d+)"
+    pattern = r"(?:tower|t)[\s.\-:]*(\d+)"
     match = re.search(pattern, raw, re.IGNORECASE)
     if match:
         return f"Tower {match.group(1)}"
@@ -62,14 +71,46 @@ def normalize_tower_id(raw: str) -> Optional[str]:
 
 def normalize_section(raw: str) -> Optional[str]:
     """
-    Normalize section text to 'Section {top|mid|bottom}'.
+    Normalize section text to 'Section {value}'.
 
     Handles formats like:
       - Section: Mid, Section - Top, Section: Bottom
+      - Section: Atas, Section: Tengah, Section: bawah
     """
-    match = re.search(r"section\s*[:\-]?\s*(top|mid|bottom)", raw, re.IGNORECASE)
+    match = re.search(
+        r"section\s*[:\-]?\s*(top|mid|bottom|atas|tengah|bawah)",
+        raw,
+        re.IGNORECASE,
+    )
     if match:
         return f"Section {match.group(1).lower()}"
+    return None
+
+
+def normalize_roadway(raw: str) -> Optional[str]:
+    """
+    Normalize roadway text to 'Jalur {value}'.
+
+    Handles multi-line values. Example:
+      - Jalur: Purwakarta - Banyuwangi
+      - Jalur: ianine\n- angakgna
+    """
+    match = re.search(r"jalur\s*[:\-]?\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
+    if match:
+        value = match.group(1).replace("\n", " ").strip()
+        value = re.sub(r"\s+", " ", value)
+        return f"Jalur {value}"
+    return None
+
+
+def normalize_measurement_tools(raw: str) -> Optional[str]:
+    """
+    Detect measurement tools text.
+
+    Returns 'Alat Ukur' if the text contains 'alat ukur' (case-insensitive).
+    """
+    if re.search(r"alat\s+ukur", raw, re.IGNORECASE):
+        return "Alat Ukur"
     return None
 
 
@@ -77,7 +118,7 @@ def parse_date(raw: str) -> Optional[date]:
     """
     Parse date from various formats using dateparser.
 
-    Supports Indonesian and US date formats.
+    Supports Indonesian and US date formats, as well as ISO yyyy-mm-dd.
     """
     parsed = dateparser.parse(raw, languages=["en", "id"])
     if parsed:
@@ -119,13 +160,19 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
 
         prompt = (
             "Read all the text in the bottom-right corner of this image. "
-            "This text block typically contains a date, a tower identifier, and a section label. "
+            "This text block typically contains a date, a tower identifier, "
+            "a roadway, a section label, and a measurement tools label. "
             "Extract the following exactly as it appears:\n"
-            "- date_text: The date text (e.g. 'Sabtu, 23 Mei 2026' or '05/31/2026')\n"
+            "- date_text: The date text (e.g. 'Sabtu, 23 Mei 2026' or '2026-06-25')\n"
             "- tower_id_text: The tower identifier text exactly as shown. "
-            "Examples: 'T.495', 'T - 495', 'Tower 500', 'Tower 500 cimahi', "
-            "'Tower 500 - depok, jawabarat'\n"
-            "- section_text: The section text exactly as shown (e.g. 'Section: Mid')"
+            "Examples: 'T.495', 'T - 495', 'Tower 500', 'Tower: 567'\n"
+            "- roadway_text: The roadway text exactly as shown, starting with 'Jalur:'. "
+            "If it spans multiple lines, include all lines. "
+            "Example: 'Jalur: Purwakarta - Banyuwangi'\n"
+            "- section_text: The section text exactly as shown "
+            "(e.g. 'Section: Mid', 'Section: Atas')\n"
+            "- measurement_tools_text: The measurement tools text exactly as shown "
+            "(e.g. 'Alat ukur')"
         )
 
         message = HumanMessage(
@@ -143,7 +190,14 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
         tower_id = normalize_tower_id(raw.tower_id_text)
         sub_id = normalize_section(raw.section_text)
         report_date = parse_date(raw.date_text)
+        roadway = normalize_roadway(raw.roadway_text) if raw.roadway_text.strip() else None
+        measurement_tools = (
+            normalize_measurement_tools(raw.measurement_tools_text)
+            if raw.measurement_tools_text.strip()
+            else None
+        )
 
+        # Required fields: tower_id, sub_id, report_date
         if not tower_id or not sub_id or not report_date:
             logger.warning(
                 "Metadata normalization failed: tower_id=%s, sub_id=%s, "
@@ -155,14 +209,27 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
             )
             return None
 
+        # Roadway is required only when roadway_text is non-empty
+        if raw.roadway_text.strip() and roadway is None:
+            logger.warning(
+                "Roadway normalization failed: roadway_text=%s, raw=%s",
+                raw.roadway_text,
+                raw.model_dump(),
+            )
+            return None
+
         return NormalizedImageMetadata(
             tower_id=tower_id,
             sub_id=sub_id,
             report_date=report_date,
+            roadway=roadway,
+            measurement_tools=measurement_tools,
             raw_text=(
                 f"date: {raw.date_text}, "
                 f"tower: {raw.tower_id_text}, "
-                f"section: {raw.section_text}"
+                f"roadway: {raw.roadway_text}, "
+                f"section: {raw.section_text}, "
+                f"tools: {raw.measurement_tools_text}"
             ),
         )
 

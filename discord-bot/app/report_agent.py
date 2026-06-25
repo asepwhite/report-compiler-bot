@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Callable
 
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import create_react_agent
@@ -34,13 +35,20 @@ Examples:
 
 REPORT GENERATION:
 When the user asks for a report, use the available tools in order:
-1. parse_dates – extracts date ranges from natural language.
-2. retrieve_messages – fetches Discord messages between two dates.
-3. process_messages – validates images and extracts metadata.
-4. generate_pdf_reports – creates PDF files.
+1. parse_report_query – extracts tower numbers, Discord date ranges, and roadways.
+2. retrieve_messages – fetches Discord messages for each date range and writes them to a temporary file.
+   Returns {file_path: str, message_count: int}. Store the file_path for the next step.
+   Call this tool once for EACH date range returned by parse_report_query.
+   Collect all file_paths into a JSON list.
+3. process_and_filter_messages – takes a JSON list of file paths, reads the messages,
+   downloads images, extracts metadata with Gemini vision, filters by tower number and roadway,
+   and writes valid entries to a file. Returns {file_path: str, entry_count: int}.
+   Store the file_path for the next step.
+4. generate_pdf_reports – takes the processed_data_file_path (e.g. "processed_entries.json")
+   and creates PDF files grouped by report_date, tower_id, and roadway.
 
 When report generation finishes, return the final result as a JSON array
-of PDF file paths, e.g. ["/tmp/report-Tower-495-2024-01-01-2024-01-07.pdf"].
+of PDF file paths, e.g. ["/tmp/report-tower-123-jalur-purwakarta-banyuwangi-2024-01-01.pdf"].
 
 If no PDFs could be generated, explain why in Indonesian.
 """
@@ -109,6 +117,7 @@ async def run_report_agent(
     channel,
     user_query: str,
     temp_dir: Path,
+    send_ack: Callable | None = None,
 ) -> dict:
     """
     Run the full report agent using a LangGraph ReAct agent.
@@ -121,6 +130,9 @@ async def run_report_agent(
         User's natural language request.
     temp_dir : Path
         Temporary directory for downloaded images and output PDFs.
+    send_ack : callable | None
+        Optional async callback to send an ACK message to the user
+        right after intent classification confirms a report request.
 
     Returns
     -------
@@ -138,6 +150,14 @@ async def run_report_agent(
     if intent_result.intent == "off_topic":
         logger.info("Guardrail blocked off-topic query (confidence=%.2f)", intent_result.confidence)
         return {"type": "off_topic", "message": _OFF_TOPIC_REFUSAL}
+
+    # Send ACK immediately for report requests
+    if intent_result.intent == "report_request" and send_ack is not None:
+        try:
+            await send_ack()
+            logger.info("ACK sent to user")
+        except Exception:
+            logger.exception("Failed to send ACK message")
 
     model = create_llm()
     tools = create_agent_tools(channel, temp_dir)

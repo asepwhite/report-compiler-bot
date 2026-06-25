@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 from app.image_metadata_extractor import (
     normalize_tower_id,
     normalize_section,
+    normalize_roadway,
+    normalize_measurement_tools,
     parse_date,
     extract_image_metadata,
     RawImageMetadata,
@@ -55,6 +57,16 @@ def test_normalize_tower_id_t_lowercase_dot():
     assert normalize_tower_id("t.500") == "Tower 500"
 
 
+def test_normalize_tower_id_colon_format():
+    """Tower: 567 → Tower 567."""
+    assert normalize_tower_id("Tower: 567") == "Tower 567"
+
+
+def test_normalize_tower_id_colon_lowercase():
+    """tower: 352 → Tower 352."""
+    assert normalize_tower_id("tower: 352") == "Tower 352"
+
+
 def test_normalize_tower_id_no_match():
     """No tower ID found returns None."""
     assert normalize_tower_id("some random text") is None
@@ -95,6 +107,21 @@ def test_normalize_section_dash_separator():
     assert normalize_section("Section - Top") == "Section top"
 
 
+def test_normalize_section_atas():
+    """Section: Atas → Section atas."""
+    assert normalize_section("Section: Atas") == "Section atas"
+
+
+def test_normalize_section_tengah():
+    """Section: Tengah → Section tengah."""
+    assert normalize_section("Section: Tengah") == "Section tengah"
+
+
+def test_normalize_section_bawah():
+    """Section: bawah → Section bawah."""
+    assert normalize_section("Section: bawah") == "Section bawah"
+
+
 def test_normalize_section_no_section():
     """Invalid section returns None."""
     assert normalize_section("some random text") is None
@@ -103,6 +130,77 @@ def test_normalize_section_no_section():
 def test_normalize_section_empty():
     """Empty string returns None."""
     assert normalize_section("") is None
+
+
+# ───────────────────────────────────────────────────────────────
+# normalize_roadway
+# ───────────────────────────────────────────────────────────────
+
+
+def test_normalize_roadway_basic():
+    """Jalur: Purwakarta - Banyuwangi → Jalur Purwakarta - Banyuwangi."""
+    assert normalize_roadway("Jalur: Purwakarta - Banyuwangi") == "Jalur Purwakarta - Banyuwangi"
+
+
+def test_normalize_roadway_multiline():
+    """Jalur: ianine\n- angakgna → Jalur ianine - angakgna."""
+    raw = "Jalur: ianine\n- angakgna"
+    assert normalize_roadway(raw) == "Jalur ianine - angakgna"
+
+
+def test_normalize_roadway_lowercase():
+    """jalur: ianine → Jalur ianine."""
+    assert normalize_roadway("jalur: ianine") == "Jalur ianine"
+
+
+def test_normalize_roadway_dash_separator():
+    """Jalur - Some Road → Jalur Some Road."""
+    assert normalize_roadway("Jalur - Some Road") == "Jalur Some Road"
+
+
+def test_normalize_roadway_no_match():
+    """No roadway found returns None."""
+    assert normalize_roadway("some random text") is None
+
+
+def test_normalize_roadway_empty():
+    """Empty string returns None."""
+    assert normalize_roadway("") is None
+
+
+# ───────────────────────────────────────────────────────────────
+# normalize_measurement_tools
+# ───────────────────────────────────────────────────────────────
+
+
+def test_normalize_measurement_tools_basic():
+    """Alat ukur → Alat Ukur."""
+    assert normalize_measurement_tools("Alat ukur") == "Alat Ukur"
+
+
+def test_normalize_measurement_tools_lowercase():
+    """alat ukur → Alat Ukur."""
+    assert normalize_measurement_tools("alat ukur") == "Alat Ukur"
+
+
+def test_normalize_measurement_tools_mixed_case():
+    """ALAT UKUR → Alat Ukur."""
+    assert normalize_measurement_tools("ALAT UKUR") == "Alat Ukur"
+
+
+def test_normalize_measurement_tools_extra_whitespace():
+    """alat  ukur → Alat Ukur."""
+    assert normalize_measurement_tools("alat  ukur") == "Alat Ukur"
+
+
+def test_normalize_measurement_tools_no_match():
+    """No measurement tools found returns None."""
+    assert normalize_measurement_tools("some random text") is None
+
+
+def test_normalize_measurement_tools_empty():
+    """Empty string returns None."""
+    assert normalize_measurement_tools("") is None
 
 
 # ───────────────────────────────────────────────────────────────
@@ -144,15 +242,17 @@ def test_parse_date_empty():
 
 
 @pytest.mark.asyncio
-async def test_extract_image_metadata_success(tmp_path):
-    """Happy path: Gemini returns valid metadata."""
+async def test_extract_image_metadata_success_old_format(tmp_path):
+    """Happy path: old format still works."""
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"fake image data")
 
     raw = RawImageMetadata(
         date_text="Sabtu, 23 Mei 2026",
         tower_id_text="T.495",
+        roadway_text="",
         section_text="Section: Mid",
+        measurement_tools_text="",
     )
 
     mock_llm = MagicMock()
@@ -167,7 +267,118 @@ async def test_extract_image_metadata_success(tmp_path):
     assert result.tower_id == "Tower 495"
     assert result.sub_id == "Section mid"
     assert result.report_date == date(2026, 5, 23)
-    assert result.raw_text == "date: Sabtu, 23 Mei 2026, tower: T.495, section: Section: Mid"
+    assert result.roadway is None
+    assert result.measurement_tools is None
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_success_new_format(tmp_path):
+    """Happy path: new format with all 5 fields."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 567",
+        roadway_text="Jalur: Purwakarta - Banyuwangi",
+        section_text="Section: Atas",
+        measurement_tools_text="Alat ukur",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is not None
+    assert result.tower_id == "Tower 567"
+    assert result.sub_id == "Section atas"
+    assert result.report_date == date(2026, 6, 25)
+    assert result.roadway == "Jalur Purwakarta - Banyuwangi"
+    assert result.measurement_tools == "Alat Ukur"
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_multiline_roadway(tmp_path):
+    """New format with multi-line roadway."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 352",
+        roadway_text="Jalur: ianine\n- angakgna",
+        section_text="Section: bawah",
+        measurement_tools_text="",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is not None
+    assert result.tower_id == "Tower 352"
+    assert result.sub_id == "Section bawah"
+    assert result.roadway == "Jalur ianine - angakgna"
+    assert result.measurement_tools is None
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_roadway_validation_fails(tmp_path):
+    """If roadway text is provided but invalid, image is skipped."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 567",
+        roadway_text="invalid roadway text",
+        section_text="Section: Atas",
+        measurement_tools_text="Alat ukur",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_optional_measurement_tools(tmp_path):
+    """Missing measurement tools should not block the image."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 567",
+        roadway_text="Jalur: Purwakarta - Banyuwangi",
+        section_text="Section: Atas",
+        measurement_tools_text="",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is not None
+    assert result.measurement_tools is None
 
 
 @pytest.mark.asyncio
@@ -179,7 +390,9 @@ async def test_extract_image_metadata_normalization_fails(tmp_path):
     raw = RawImageMetadata(
         date_text="Sabtu, 23 Mei 2026",
         tower_id_text="invalid text",
+        roadway_text="",
         section_text="Section: Mid",
+        measurement_tools_text="",
     )
 
     mock_llm = MagicMock()

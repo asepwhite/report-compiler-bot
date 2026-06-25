@@ -48,9 +48,9 @@ class TestGeneratePdf:
         """A PDF file is created at the specified output path."""
         output_path = temp_dir / "report.pdf"
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data=grouped_data,
             output_path=str(output_path),
         )
@@ -61,9 +61,9 @@ class TestGeneratePdf:
         """The output path is respected and not modified internally."""
         output_path = temp_dir / "custom_name.pdf"
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data=grouped_data,
             output_path=str(output_path),
         )
@@ -73,9 +73,9 @@ class TestGeneratePdf:
         """Even with no images, a PDF is generated with just the title."""
         output_path = temp_dir / "empty_report.pdf"
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data={},
             output_path=str(output_path),
         )
@@ -91,9 +91,9 @@ class TestGeneratePdf:
             ],
         }
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data=grouped,
             output_path=str(output_path),
         )
@@ -108,9 +108,9 @@ class TestGeneratePdf:
             ],
         }
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data=grouped,
             output_path=str(output_path),
         )
@@ -121,10 +121,27 @@ class TestGeneratePdf:
         """Each sub-id has its own section in the PDF."""
         output_path = temp_dir / "multi_section.pdf"
         generate_pdf(
-            report_id="tower 123",
-            start_date=date(2026, 6, 10),
-            end_date=date(2026, 6, 11),
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway=None,
             grouped_data=grouped_data,
+            output_path=str(output_path),
+        )
+        assert output_path.exists()
+
+    def test_roadway_in_title(self, temp_dir, dummy_images):
+        """When roadway is provided, it appears in the PDF title."""
+        output_path = temp_dir / "roadway_report.pdf"
+        grouped = {
+            "section A": [
+                {"message_id": 1, "images": [dummy_images[0]]},
+            ],
+        }
+        generate_pdf(
+            report_id="Tower 123",
+            report_date=date(2026, 6, 10),
+            roadway="Jalur Purwakarta - Banyuwangi",
+            grouped_data=grouped,
             output_path=str(output_path),
         )
         assert output_path.exists()
