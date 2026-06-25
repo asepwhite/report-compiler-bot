@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import logging
-import os
 import re
 from datetime import date
 from pathlib import Path
@@ -11,8 +10,9 @@ from typing import Optional
 
 import dateparser
 from langchain_core.messages import HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
+
+from app.llm import create_llm
 
 
 logger = logging.getLogger(__name__)
@@ -85,19 +85,6 @@ def parse_date(raw: str) -> Optional[date]:
     return None
 
 
-def _create_llm() -> ChatGoogleGenerativeAI:
-    """Create the Gemini LLM instance."""
-    google_api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not google_api_key or google_api_key == "your_google_api_key_here":
-        raise RuntimeError("GOOGLE_API_KEY not set in environment")
-
-    return ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite",
-        temperature=0.0,
-        google_api_key=google_api_key,
-    )
-
-
 async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMetadata]:
     """
     Extract metadata from an image using Gemini vision, then normalize.
@@ -127,7 +114,7 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
         }
         mime_type = mime_types.get(suffix, "image/jpeg")
 
-        llm = _create_llm()
+        llm = create_llm()
         structured_llm = llm.with_structured_output(RawImageMetadata)
 
         prompt = (

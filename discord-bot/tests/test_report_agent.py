@@ -3,15 +3,10 @@
 import pytest
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
-from app.report_agent import (
-    run_report_agent,
-    DateParseError,
-    NoMessagesError,
-    NoValidReportsError,
-)
-from app.nl_date_parser import ReportDateRequest
+from app.intent_classifier import IntentClassification
+from app.report_agent import run_report_agent
 
 
 # ───────────────────────────────────────────────────────────────
@@ -21,101 +16,251 @@ from app.nl_date_parser import ReportDateRequest
 
 @pytest.mark.asyncio
 async def test_run_report_agent_success(tmp_path):
-    """Full successful pipeline: dates → messages → process → PDFs."""
+    """Agent returns PDF paths in its final message."""
     channel = MagicMock()
-    date_request = ReportDateRequest(
-        discord_start_date=date(2026, 6, 10),
-        discord_end_date=date(2026, 6, 11),
-        report_start_date=date(2026, 6, 10),
-        report_end_date=date(2026, 6, 10),
-        reasoning="test",
-    )
-    messages = [{"message_id": 1, "content": "test"}]
-    processed = [
-        {
-            "tower_id": "tower 123",
-            "sub_id": "section A",
-            "report_date": "2026-06-10",
-            "message_id": 1,
-            "images": [str(tmp_path / "test.png")],
-        }
-    ]
-    pdf_paths = [str(tmp_path / "report-tower 123-2026-06-10-2026-06-10.pdf")]
+    pdf_paths = [str(tmp_path / "report-Tower-495-2026-06-10-2026-06-10.pdf")]
 
-    with patch("app.report_agent.parse_report_dates", return_value=date_request):
-        with patch("app.report_agent.retrieve_messages", new=AsyncMock(return_value=messages)):
-            with patch("app.report_agent.process_messages", new=AsyncMock(return_value=processed)):
-                with patch("app.report_agent.generate_pdf_reports", return_value=pdf_paths):
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content=f'["{pdf_paths[0]}"]'),
+        ]
+    }
+
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
                     result = await run_report_agent(
                         channel=channel,
                         user_query="bikin report 10 juni 2026",
                         temp_dir=tmp_path,
                     )
 
-    assert result == pdf_paths
+    assert result["type"] == "report"
+    assert result["pdf_paths"] == pdf_paths
 
 
 @pytest.mark.asyncio
-async def test_run_report_agent_date_parse_failure():
-    """When date parsing fails, DateParseError is raised."""
+async def test_run_report_agent_pdf_paths_in_dict(tmp_path):
+    """Agent returns PDF paths inside a JSON dict."""
     channel = MagicMock()
+    pdf_paths = [str(tmp_path / "report.pdf")]
 
-    with patch("app.report_agent.parse_report_dates", return_value=None):
-        with pytest.raises(DateParseError) as exc_info:
-            await run_report_agent(
-                channel=channel,
-                user_query="random text",
-                temp_dir=Path("/tmp"),
-            )
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content='{"pdf_paths": ["' + pdf_paths[0] + '"]}'),
+        ]
+    }
 
-    assert "Gagal membuat laporan secara otomatis" in exc_info.value.message
-
-
-@pytest.mark.asyncio
-async def test_run_report_agent_no_messages():
-    """When no Discord messages are found, NoMessagesError is raised."""
-    channel = MagicMock()
-    date_request = ReportDateRequest(
-        discord_start_date=date(2026, 6, 10),
-        discord_end_date=date(2026, 6, 10),
-        report_start_date=date(2026, 6, 10),
-        report_end_date=date(2026, 6, 10),
-        reasoning="test",
-    )
-
-    with patch("app.report_agent.parse_report_dates", return_value=date_request):
-        with patch("app.report_agent.retrieve_messages", new=AsyncMock(return_value=[])):
-            with pytest.raises(NoMessagesError) as exc_info:
-                await run_report_agent(
-                    channel=channel,
-                    user_query="bikin report 10 juni 2026",
-                    temp_dir=Path("/tmp"),
-                )
-
-    assert "Tidak ada pesan yang ditemukan" in exc_info.value.message
-
-
-@pytest.mark.asyncio
-async def test_run_report_agent_no_valid_reports():
-    """When no valid report messages exist, NoValidReportsError is raised."""
-    channel = MagicMock()
-    date_request = ReportDateRequest(
-        discord_start_date=date(2026, 6, 10),
-        discord_end_date=date(2026, 6, 10),
-        report_start_date=date(2026, 6, 10),
-        report_end_date=date(2026, 6, 10),
-        reasoning="test",
-    )
-    messages = [{"message_id": 1, "content": "test"}]
-
-    with patch("app.report_agent.parse_report_dates", return_value=date_request):
-        with patch("app.report_agent.retrieve_messages", new=AsyncMock(return_value=messages)):
-            with patch("app.report_agent.process_messages", new=AsyncMock(return_value=[])):
-                with pytest.raises(NoValidReportsError) as exc_info:
-                    await run_report_agent(
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
                         channel=channel,
                         user_query="bikin report 10 juni 2026",
-                        temp_dir=Path("/tmp"),
+                        temp_dir=tmp_path,
                     )
 
-    assert "Tidak ada pesan laporan yang valid" in exc_info.value.message
+    assert result["type"] == "report"
+    assert result["pdf_paths"] == pdf_paths
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_no_paths_returns_error(tmp_path):
+    """When tools are called but no PDFs are found, return error dict."""
+    channel = MagicMock()
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content="Maaf, tidak ada pesan yang ditemukan di rentang tanggal tersebut."),
+        ]
+    }
+
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="random text",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "error"
+    assert "tidak ada pesan" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_empty_response_returns_error(tmp_path):
+    """When tools are called but response is empty, return error dict."""
+    channel = MagicMock()
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content=""),
+        ]
+    }
+
+    intent = IntentClassification(intent="report_request", confidence=0.95, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="test",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "error"
+    assert "Gagal membuat laporan" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_greeting_no_tools(tmp_path):
+    """When no tools are called, return greeting dict."""
+    channel = MagicMock()
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Halo! Ada yang bisa saya bantu?"),
+        ]
+    }
+
+    intent = IntentClassification(intent="greeting", confidence=0.92, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="halo bot",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "greeting"
+    assert "Halo!" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_greeting_list_content(tmp_path):
+    """Gemini returns content as list of dicts — normalize and treat as greeting."""
+    channel = MagicMock()
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content=[{"type": "text", "text": "Selamat sore! Ada yang bisa saya bantu?"}]),
+        ]
+    }
+
+    intent = IntentClassification(intent="greeting", confidence=0.92, reasoning="test")
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="selamat sore",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "greeting"
+    assert "Selamat sore!" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_off_topic_blocked(tmp_path):
+    """High-confidence off-topic queries are blocked before the agent runs."""
+    channel = MagicMock()
+
+    intent = IntentClassification(
+        intent="off_topic",
+        confidence=0.88,
+        reasoning="Pengguna bertanya tentang pemrograman",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        # Agent should never be created or invoked
+        with patch("app.report_agent.create_react_agent") as mock_create_agent:
+            result = await run_report_agent(
+                channel=channel,
+                user_query="apa itu Python",
+                temp_dir=tmp_path,
+            )
+
+    assert result["type"] == "off_topic"
+    assert "hanya bisa membantu dengan pembuatan laporan" in result["message"]
+    mock_create_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_mixed_intent_blocked(tmp_path):
+    """Mixed-intent (report + off-topic question) is blocked before the agent runs."""
+    channel = MagicMock()
+
+    intent = IntentClassification(
+        intent="off_topic",
+        confidence=0.85,
+        reasoning="Pengguna meminta laporan tetapi juga bertanya jarak antar kota",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent") as mock_create_agent:
+            result = await run_report_agent(
+                channel=channel,
+                user_query=(
+                    "om tolong bantu bikin laporan @reporting-bot , "
+                    "tapi gw harus tau dulu jarak dari jakarta ke bandung"
+                ),
+                temp_dir=tmp_path,
+            )
+
+    assert result["type"] == "off_topic"
+    assert "hanya bisa membantu dengan pembuatan laporan" in result["message"]
+    mock_create_agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_report_agent_low_confidence_off_topic_allowed(tmp_path):
+    """Low-confidence off-topic is overridden to report_request and agent runs."""
+    channel = MagicMock()
+    pdf_paths = [str(tmp_path / "report.pdf")]
+
+    mock_agent = AsyncMock()
+    mock_agent.ainvoke.return_value = {
+        "messages": [
+            MagicMock(content="Tool result", type="tool"),
+            MagicMock(content=f'["{pdf_paths[0]}"]'),
+        ]
+    }
+
+    # classify_intent returns off_topic but with low confidence → overridden to report_request
+    intent = IntentClassification(
+        intent="report_request",
+        confidence=0.5,
+        reasoning="Dianggap report_request karena confidence off_topic (0.50) di bawah threshold (0.6)",
+    )
+    with patch("app.report_agent.classify_intent", return_value=intent):
+        with patch("app.report_agent.create_react_agent", return_value=mock_agent):
+            with patch("app.report_agent.create_llm", return_value=MagicMock()):
+                with patch("app.report_agent.create_agent_tools", return_value=[]):
+                    result = await run_report_agent(
+                        channel=channel,
+                        user_query="tolong bantu",
+                        temp_dir=tmp_path,
+                    )
+
+    assert result["type"] == "report"
+    assert result["pdf_paths"] == pdf_paths

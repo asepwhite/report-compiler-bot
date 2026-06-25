@@ -1,11 +1,11 @@
 """Natural language date parser using Gemini for Indonesian queries."""
 
 import logging
-import os
 from datetime import date, datetime
 
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
+
+from app.llm import create_llm
 
 
 logger = logging.getLogger(__name__)
@@ -52,19 +52,6 @@ Permintaan pengguna: {query}
 """
 
 
-def _create_llm() -> ChatGoogleGenerativeAI:
-    """Create the Gemini LLM instance."""
-    google_api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not google_api_key or google_api_key == "your_google_api_key_here":
-        raise RuntimeError("GOOGLE_API_KEY not set in environment")
-
-    return ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite",
-        temperature=0.0,
-        google_api_key=google_api_key,
-    )
-
-
 def parse_report_dates(user_query: str) -> ReportDateRequest | None:
     """
     Extract report and Discord date ranges from an Indonesian natural language query.
@@ -80,7 +67,7 @@ def parse_report_dates(user_query: str) -> ReportDateRequest | None:
         The parsed date request, or None if parsing fails.
     """
     try:
-        llm = _create_llm()
+        llm = create_llm()
         structured_llm = llm.with_structured_output(ReportDateRequest)
 
         today = datetime.now().strftime("%Y-%m-%d (%A)")
