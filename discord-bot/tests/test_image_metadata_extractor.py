@@ -160,7 +160,7 @@ async def test_extract_image_metadata_success(tmp_path):
     mock_structured.invoke.return_value = raw
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("app.image_metadata_extractor._create_llm", return_value=mock_llm):
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
         result = await extract_image_metadata(img_path)
 
     assert result is not None
@@ -187,7 +187,7 @@ async def test_extract_image_metadata_normalization_fails(tmp_path):
     mock_structured.invoke.return_value = raw
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("app.image_metadata_extractor._create_llm", return_value=mock_llm):
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
         result = await extract_image_metadata(img_path)
 
     assert result is None
@@ -204,7 +204,7 @@ async def test_extract_image_metadata_gemini_error(tmp_path):
     mock_structured.invoke.side_effect = Exception("API error")
     mock_llm.with_structured_output.return_value = mock_structured
 
-    with patch("app.image_metadata_extractor._create_llm", return_value=mock_llm):
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
         result = await extract_image_metadata(img_path)
 
     assert result is None

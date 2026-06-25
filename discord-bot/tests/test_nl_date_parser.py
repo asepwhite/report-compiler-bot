@@ -42,7 +42,7 @@ def test_parse_report_dates_explicit_single_day():
         reasoning="User requested report for 11 June 2026",
     )
 
-    with patch("app.nl_date_parser._create_llm", return_value=FakeLLM(expected)):
+    with patch("app.nl_date_parser.create_llm", return_value=FakeLLM(expected)):
         result = parse_report_dates("tolong bikin report untuk tanggal 11 juni 2026")
 
     assert result is not None
@@ -62,7 +62,7 @@ def test_parse_report_dates_different_discord_range():
         reasoning="Discord range 10-11 June, report for 10 June",
     )
 
-    with patch("app.nl_date_parser._create_llm", return_value=FakeLLM(expected)):
+    with patch("app.nl_date_parser.create_llm", return_value=FakeLLM(expected)):
         result = parse_report_dates(
             "tolong bikinin report untuk tanggal 10 juni 2026 dari message discord di tanggal 10 - 11 juni 2026"
         )
@@ -84,7 +84,7 @@ def test_parse_report_dates_relative_yesterday():
         reasoning="kemarin = 16 June 2026",
     )
 
-    with patch("app.nl_date_parser._create_llm", return_value=FakeLLM(expected)):
+    with patch("app.nl_date_parser.create_llm", return_value=FakeLLM(expected)):
         result = parse_report_dates("bikin laporan kemarin dong")
 
     assert result is not None
@@ -93,7 +93,7 @@ def test_parse_report_dates_relative_yesterday():
 
 def test_parse_report_dates_failure():
     """When LLM returns None, parse_report_dates returns None."""
-    with patch("app.nl_date_parser._create_llm", return_value=FakeLLM(None)):
+    with patch("app.nl_date_parser.create_llm", return_value=FakeLLM(None)):
         result = parse_report_dates("some random text")
 
     assert result is None
@@ -101,10 +101,7 @@ def test_parse_report_dates_failure():
 
 def test_parse_report_dates_exception():
     """When LLM raises an exception, parse_report_dates returns None."""
-    def raise_error():
-        raise RuntimeError("API error")
-
-    with patch("app.nl_date_parser._create_llm", side_effect=RuntimeError("API error")):
+    with patch("app.nl_date_parser.create_llm", side_effect=RuntimeError("API error")):
         result = parse_report_dates("bikin report 11 juni 2026")
 
     assert result is None

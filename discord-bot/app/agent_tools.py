@@ -1,11 +1,13 @@
 """LangChain tools for the report agent."""
 
+import asyncio
 import json
 import logging
 from datetime import date
 from pathlib import Path
 
 from langchain.tools import tool
+from langchain_core.tools import StructuredTool
 
 from app.date_util import gmt7_to_utc_range
 from app.discord_util import fetch_messages_in_range, download_message_images
@@ -265,3 +267,117 @@ def generate_pdf_reports(
 
     logger.info("Generated %d PDFs: %s", len(pdf_paths), pdf_paths)
     return pdf_paths
+
+
+def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
+    """
+    Create LangChain StructuredTool instances bound to request context.
+
+    Parameters
+    ----------
+    channel : discord.TextChannel
+        The Discord channel to fetch messages from.
+    temp_dir : Path
+        Temporary directory for downloaded images and output PDFs.
+
+    Returns
+    -------
+    list[StructuredTool]
+        List of tools the agent can invoke.
+    """
+    tools: list[StructuredTool] = []
+
+    async def _parse_dates(user_query: str) -> str:
+        """Extract date ranges from a natural language query."""
+        from app.nl_date_parser import parse_report_dates
+        result = await asyncio.to_thread(parse_report_dates, user_query)
+        if result is None:
+            return json.dumps({"error": "Failed to parse dates from query"})
+        return json.dumps({
+            "discord_start_date": result.discord_start_date.isoformat(),
+            "discord_end_date": result.discord_end_date.isoformat(),
+            "report_start_date": result.report_start_date.isoformat(),
+            "report_end_date": result.report_end_date.isoformat(),
+            "reasoning": result.reasoning,
+        })
+
+    tools.append(StructuredTool.from_function(
+        coroutine=_parse_dates,
+        name="parse_dates",
+        description=(
+            "Extract date ranges from a natural language query. "
+            "Input: user_query (str). "
+            "Output: JSON with discord_start_date, discord_end_date, "
+            "report_start_date, report_end_date, and reasoning."
+        ),
+    ))
+
+    async def _retrieve(discord_start_date: str, discord_end_date: str) -> str:
+        """Retrieve Discord messages from the bound channel within a date range."""
+        start = date.fromisoformat(discord_start_date)
+        end = date.fromisoformat(discord_end_date)
+        messages = await retrieve_messages(start, end, channel)
+        return json.dumps(messages)
+
+    tools.append(StructuredTool.from_function(
+        coroutine=_retrieve,
+        name="retrieve_messages",
+        description=(
+            "Retrieve all Discord messages from a channel within a date range. "
+            "Input: discord_start_date (YYYY-MM-DD), discord_end_date (YYYY-MM-DD). "
+            "Output: JSON string of message dicts with keys: "
+            "message_id, content, timestamp, author, attachments."
+        ),
+    ))
+
+    async def _process(
+        messages_json: str,
+        report_start_date: str,
+        report_end_date: str,
+    ) -> str:
+        """Process Discord messages to extract valid report entries."""
+        messages = json.loads(messages_json)
+        start = date.fromisoformat(report_start_date)
+        end = date.fromisoformat(report_end_date)
+        entries = await process_messages(messages, start, end, temp_dir)
+        return json.dumps(entries)
+
+    tools.append(StructuredTool.from_function(
+        coroutine=_process,
+        name="process_messages",
+        description=(
+            "Process Discord messages to extract valid report entries. "
+            "Validates messages have image attachments, downloads images, "
+            "extracts metadata from each image using Gemini vision, "
+            "filters by report date range. "
+            "Input: messages_json (str), report_start_date (YYYY-MM-DD), report_end_date (YYYY-MM-DD). "
+            "Output: JSON string of list of objects with keys: tower_id, sub_id, report_date."
+        ),
+    ))
+
+    async def _generate(
+        processed_data_json: str,
+        report_start_date: str,
+        report_end_date: str,
+    ) -> str:
+        """Generate PDF reports from processed message data."""
+        def _sync() -> str:
+            data = json.loads(processed_data_json)
+            start = date.fromisoformat(report_start_date)
+            end = date.fromisoformat(report_end_date)
+            paths = generate_pdf_reports(data, temp_dir, start, end)
+            return json.dumps(paths)
+        return await asyncio.to_thread(_sync)
+
+    tools.append(StructuredTool.from_function(
+        coroutine=_generate,
+        name="generate_pdf_reports",
+        description=(
+            "Generate PDF reports from processed message data. "
+            "Groups data by tower_id and sub_id, then generates one PDF per tower_id. "
+            "Input: processed_data_json (str), report_start_date (YYYY-MM-DD), report_end_date (YYYY-MM-DD). "
+            "Output: JSON string of list of generated PDF file paths."
+        ),
+    ))
+
+    return tools

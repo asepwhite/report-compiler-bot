@@ -4,9 +4,7 @@ import logging
 import os
 import sys
 import json
-import asyncio
 import shutil
-import traceback
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -20,9 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # that read env vars at module level.
 load_dotenv()
 
-from app.discord_util import parse_compile_command
-from app.report_service import compile_report
-from app.report_agent import run_report_agent, DateParseError, NoMessagesError, NoValidReportsError
+from app.report_agent import run_report_agent
 
 # Configure logging
 logging.basicConfig(
@@ -111,13 +107,6 @@ def print_message(payload):
     print("=" * 60)
 
 
-def _is_nl_report_request(content: str) -> bool:
-    """Detect if the message is a natural language report request."""
-    text = content.lower()
-    keywords = ["report", "laporan", "bikin", "buatkan", "tolong"]
-    return any(kw in text for kw in keywords)
-
-
 def _is_bot_mentioned(message, bot_user) -> bool:
     """Check if the bot was mentioned directly as a user or via a role."""
     # Direct user mention
@@ -131,40 +120,38 @@ def _is_bot_mentioned(message, bot_user) -> bool:
 
 
 async def _handle_nl_report_command(message):
-    """Handle natural language report requests via the agent."""
-    ack_message = await message.reply("perintah diterima, sedang memproses laporan...")
+    """Handle any bot mention by delegating to the ReAct agent."""
     temp_path = None
 
     try:
         temp_path = _create_temp_dir(message.id)
-        pdf_paths = await run_report_agent(
+        result = await run_report_agent(
             channel=message.channel,
             user_query=message.content,
             temp_dir=temp_path,
         )
 
-        # Upload all PDFs
-        files = [discord.File(path) for path in pdf_paths]
-        await message.reply(files=files)
+        if result["type"] == "greeting":
+            await message.reply(result["message"])
+            return
 
-        # Update ack message
-        await ack_message.edit(
-            content=f"✅ {len(pdf_paths)} laporan berhasil dibuat!"
-        )
+        if result["type"] == "error":
+            await message.reply(result["message"])
+            return
 
-    except DateParseError as e:
-        logger.error("DateParseError: %s", e.message)
-        await ack_message.edit(content=e.message)
-    except NoMessagesError as e:
-        logger.error("NoMessagesError: %s", e.message)
-        await ack_message.edit(content=e.message)
-    except NoValidReportsError as e:
-        logger.error("NoValidReportsError: %s", e.message)
-        await ack_message.edit(content=e.message)
+        if result["type"] == "report":
+            ack_message = await message.reply("perintah diterima, sedang memproses laporan...")
+            files = [discord.File(path) for path in result["pdf_paths"]]
+            await message.reply(files=files)
+            await ack_message.edit(
+                content=f"✅ {len(result['pdf_paths'])} laporan berhasil dibuat!"
+            )
+            return
+
     except Exception as e:
         logger.exception("Unexpected error in NL report agent: %s", e)
-        await ack_message.edit(
-            content="Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+        await message.reply(
+            "Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
         )
     finally:
         if temp_path and temp_path.exists():
@@ -204,61 +191,10 @@ def create_bot():
         if not _is_bot_mentioned(message, bot.user):
             return
 
-        # Try to parse the compile command first
-        dates = parse_compile_command(message.content)
-        if dates is not None:
-            start_date, end_date = dates
-            await _handle_compile_command(message, start_date, end_date)
-            return
-
-        # Try natural language report request
-        if _is_nl_report_request(message.content):
-            await _handle_nl_report_command(message)
-            return
+        # Any mention triggers the agent
+        await _handle_nl_report_command(message)
 
     return bot
-
-
-async def _handle_compile_command(message, start_date, end_date):
-    """
-    Handle the compile command: acknowledge, compile, and upload PDFs.
-    """
-    # Acknowledge
-    ack_message = await message.reply("perintah diterima, compiling reports...")
-    temp_path = None
-
-    try:
-        temp_path = _create_temp_dir(message.id)
-        pdf_paths = await compile_report(
-            message.channel,
-            start_date,
-            end_date,
-            temp_path,
-        )
-
-        if not pdf_paths:
-            await ack_message.edit(content="tidak ada chat tentang laporan proyek")
-            return
-
-        # Upload all PDFs
-        files = [discord.File(path) for path in pdf_paths]
-        await message.reply(files=files)
-
-        # Update ack message
-        await ack_message.edit(
-            content=f"✅ {len(pdf_paths)} laporan berhasil dibuat!"
-        )
-
-    except Exception as e:
-        print(f"❌ Error compiling report: {e}")
-        await ack_message.edit(content="terjadi kesalahan saat membuat laporan. coba lagi nanti.")
-    finally:
-        if temp_path and temp_path.exists():
-            try:
-                shutil.rmtree(temp_path)
-                logger.info("Cleaned up temp directory: %s", temp_path)
-            except Exception:
-                logger.warning("Failed to clean up temp directory: %s", temp_path)
 
 
 if __name__ == "__main__":
