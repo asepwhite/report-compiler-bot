@@ -17,7 +17,7 @@ _OFF_TOPIC_THRESHOLD = 0.6
 class IntentClassification(BaseModel):
     """Structured output from the intent classifier LLM."""
 
-    intent: Literal["report_request", "greeting", "off_topic"] = Field(
+    intent: Literal["report_request", "project_crud", "greeting", "off_topic"] = Field(
         description="Klasifikasi intent dari pesan pengguna."
     )
     confidence: float = Field(
@@ -37,22 +37,29 @@ Tugasmu mengklasifikasikan pesan pengguna ke dalam salah satu kategori berikut:
    Contoh: "om tolong bikin laporan 10 juni", "report tower 495 dong", "pdf minggu ini ya",
    "tolong buatin laporan untuk kemarin", "laporan bulan lalu", "halo, bisa bantu bikin laporan?".
 
-2. greeting — Hanya menyapa, berterima kasih, atau small talk ringan. Tidak ada permintaan laporan sama sekali.
+2. project_crud — Pesan meminta operasi database project: simpan, cari, update, hapus, atau list data project/tower.
+   Contoh: "simpan tower T123 di jalur jakarta", "cari project tower T123", "list semua project",
+   "update tower T123 roadway jadi Surabaya", "hapus data tower T123 jalur jakarta",
+   "tampilkan detail tower T123", "ada berapa tower di region Jawa Barat".
+
+3. greeting — Hanya menyapa, berterima kasih, atau small talk ringan. Tidak ada permintaan laporan atau project CRUD sama sekali.
    Contoh: "halo", "selamat pagi", "hi", "terima kasih", "sama-sama",
    "apa kabar", "good morning".
 
-3. off_topic — Pesan mengandung permintaan atau pertanyaan yang tidak berhubungan dengan pembuatan laporan, TERMASUK jika diselipkan bersama permintaan laporan.
+4. off_topic — Pesan mengandung permintaan atau pertanyaan yang tidak berhubungan dengan pembuatan laporan ATAU project CRUD, TERMASUK jika diselipkan bersama permintaan lain.
    Contoh murni off-topic: "apa itu Python", "bantu kerjain PR matematika", "cuaca hari ini",
    "resep nasi goreng", "berapa harga bitcoin", "cara install Windows".
-   Contoh MIXED (laporan + off-topic) → off_topic:
+   Contoh MIXED (laporan/project + off-topic) → off_topic:
    - "bikin laporan tower 495, tapi jarak jakarta ke bandung berapa?"
    - "om tolong bantu bikin laporan @reporting-bot , tapi gw harus tau dulu jarak dari jakarta ke bandung"
    - "report minggu ini dan juga cara install python"
    - "bikin laporan 10 juni, terus besok kita meeting jam berapa?"
+   - "simpan tower T123, tapi besok kita meeting jam berapa?"
 
 Peraturan penting:
-- Jika pengguna meminta laporan TAPI juga mengajukan pertanyaan atau permintaan lain yang tidak berhubungan dengan laporan (misalnya: jarak antar kota, cuaca, bantuan PR, resep, meeting, install software), klasifikasikan sebagai **off_topic**.
+- Jika pengguna meminta laporan TAPI juga mengajukan pertanyaan atau permintaan lain yang tidak berhubungan dengan laporan/project (misalnya: jarak antar kota, cuaca, bantuan PR, resep, meeting, install software), klasifikasikan sebagai **off_topic**.
 - Hanya klasifikasikan sebagai **report_request** jika seluruh pesan hanya berisi permintaan laporan — basa-basi/sapaan diperbolehkan.
+- Hanya klasifikasikan sebagai **project_crud** jika seluruh pesan hanya berisi permintaan CRUD project — basa-basi/sapaan diperbolehkan.
 - Jika tidak yakin atau ambigu, pilih report_request untuk menghindari false positive.
 - Jawab dalam Bahasa Indonesia.
 
@@ -62,7 +69,7 @@ Pesan pengguna: {query}
 
 def classify_intent(user_query: str) -> IntentClassification:
     """
-    Classify a user query into report_request, greeting, or off_topic.
+    Classify a user query into report_request, project_crud, greeting, or off_topic.
 
     Parameters
     ----------
