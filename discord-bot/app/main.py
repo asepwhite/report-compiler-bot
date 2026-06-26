@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 from app.report_agent import run_report_agent
+from app.project_agent import run_project_agent
+from app.intent_classifier import classify_intent
 
 # Configure logging
 logging.basicConfig(
@@ -112,12 +114,43 @@ def _is_bot_mentioned(message, bot_user) -> bool:
     return False
 
 
-async def _handle_nl_report_command(message):
-    """Handle any bot mention by delegating to the ReAct agent."""
+async def _handle_nl_command(message):
+    """Handle any bot mention by classifying intent and delegating to the right agent."""
     temp_path = None
     ack_message = None
 
     try:
+        # Classify intent first
+        intent_result = classify_intent(message.content)
+
+        if intent_result.intent == "greeting":
+            await message.reply(
+                "Halo! Ada yang bisa saya bantu? "
+                "Saya bisa membantu pembuatan laporan atau manajemen data project."
+            )
+            return
+
+        if intent_result.intent == "off_topic":
+            await message.reply(
+                "Maaf, saya hanya bisa membantu dengan pembuatan laporan atau manajemen data project. "
+                "Ada yang bisa saya bantu?"
+            )
+            return
+
+        if intent_result.intent == "project_crud":
+            ack_message = await message.reply(
+                "⏳ Sedang memproses data project, mohon tunggu..."
+            )
+
+            result = await run_project_agent(user_query=message.content)
+
+            if result["type"] == "error":
+                await ack_message.edit(content=f"❌ {result['message']}")
+            else:
+                await ack_message.edit(content=f"✅ {result['message']}")
+            return
+
+        # Default: report_request
         temp_path = _create_temp_dir(message.id)
 
         async def send_ack():
@@ -158,14 +191,14 @@ async def _handle_nl_report_command(message):
             return
 
     except Exception as e:
-        logger.exception("Unexpected error in NL report agent: %s", e)
+        logger.exception("Unexpected error in NL command handler: %s", e)
         if ack_message:
             await ack_message.edit(
-                content="Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+                content="Terjadi kesalahan. Silakan coba lagi nanti."
             )
         else:
             await message.reply(
-                "Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."
+                "Terjadi kesalahan. Silakan coba lagi nanti."
             )
     finally:
         if temp_path and temp_path.exists():
@@ -206,7 +239,7 @@ def create_bot():
             return
 
         # Any mention triggers the agent
-        await _handle_nl_report_command(message)
+        await _handle_nl_command(message)
 
     return bot
 

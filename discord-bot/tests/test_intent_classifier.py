@@ -10,6 +10,80 @@ from app.intent_classifier import classify_intent, IntentClassification
 # ───────────────────────────────────────────────────────────────
 
 
+def test_classify_intent_project_crud():
+    """A project CRUD request is classified correctly."""
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_structured.invoke.return_value = IntentClassification(
+        intent="project_crud",
+        confidence=0.91,
+        reasoning="Pengguna meminta menyimpan data project",
+    )
+
+    with patch("app.intent_classifier.create_llm", return_value=mock_llm):
+        result = classify_intent("simpan tower T123 di jalur jakarta")
+
+    assert result.intent == "project_crud"
+    assert result.confidence == 0.91
+
+
+def test_classify_intent_project_crud_list():
+    """Listing projects is classified as project_crud."""
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_structured.invoke.return_value = IntentClassification(
+        intent="project_crud",
+        confidence=0.88,
+        reasoning="Pengguna meminta daftar project",
+    )
+
+    with patch("app.intent_classifier.create_llm", return_value=mock_llm):
+        result = classify_intent("list semua project")
+
+    assert result.intent == "project_crud"
+
+
+def test_classify_intent_project_crud_update():
+    """Updating a project is classified as project_crud."""
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_structured.invoke.return_value = IntentClassification(
+        intent="project_crud",
+        confidence=0.87,
+        reasoning="Pengguna meminta update data project",
+    )
+
+    with patch("app.intent_classifier.create_llm", return_value=mock_llm):
+        result = classify_intent("update tower T123 roadway jadi Surabaya")
+
+    assert result.intent == "project_crud"
+
+
+def test_classify_intent_project_crud_delete():
+    """Deleting a project is classified as project_crud."""
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_structured.invoke.return_value = IntentClassification(
+        intent="project_crud",
+        confidence=0.89,
+        reasoning="Pengguna meminta hapus data project",
+    )
+
+    with patch("app.intent_classifier.create_llm", return_value=mock_llm):
+        result = classify_intent("hapus data tower T123 jalur jakarta")
+
+    assert result.intent == "project_crud"
+
+
+# ───────────────────────────────────────────────────────────────
+# classify_intent - existing tests
+# ───────────────────────────────────────────────────────────────
+
+
 def test_classify_intent_report_request():
     """A clear report request is classified correctly."""
     mock_llm = MagicMock()
