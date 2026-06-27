@@ -198,6 +198,18 @@ def test_normalize_measurement_tools_no_match():
     assert normalize_measurement_tools("some random text") is None
 
 
+def test_normalize_measurement_tools_negative_context():
+    """Text that merely contains 'alat ukur' in a negative context returns None."""
+    assert normalize_measurement_tools("Tidak ada alat ukur") is None
+    assert normalize_measurement_tools("tidak terdapat alat ukur") is None
+
+
+def test_normalize_measurement_tools_with_surrounding_text():
+    """Text with extra words around 'alat ukur' returns None (fullmatch required)."""
+    assert normalize_measurement_tools("alat ukur: multimeter") is None
+    assert normalize_measurement_tools("label alat ukur") is None
+
+
 def test_normalize_measurement_tools_empty():
     """Empty string returns None."""
     assert normalize_measurement_tools("") is None

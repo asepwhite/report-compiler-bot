@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -14,7 +15,11 @@ from app.date_util import gmt7_to_utc_range
 from app.discord_util import fetch_messages_in_range, download_message_images
 from app.report_extractor import is_valid_report_message
 from app.image_metadata_extractor import extract_image_metadata
-from app.document_generator import generate_pdf
+from app.document_generator import generate_docx
+
+
+# Path to the project_details SQLite database (discord-bot/data/projects.db).
+_PROJECT_DB_PATH = Path(__file__).parent.parent / "data" / "projects.db"
 
 
 logger = logging.getLogger(__name__)
@@ -159,6 +164,7 @@ async def _process_single_message(
             "sub_id": metadata.sub_id,
             "report_date": metadata.report_date.isoformat(),
             "roadway": metadata.roadway,
+            "measurement_tools": metadata.measurement_tools,
             "message_id": mock_msg.id,
             "images": [img_path],
         })
@@ -263,15 +269,100 @@ def _slugify(value: str | None) -> str:
     return slug
 
 
-def generate_pdf_reports(
+def _capitalize_filename_part(value: str) -> str:
+    """
+    Capitalize the first letter of each token and strip filesystem-invalid chars.
+
+    Used for report filenames: preserves spaces, dashes, and digits while
+    removing characters like / \\ : * ? \" < > | that break filenames.
+    """
+    if not value:
+        return ""
+    cleaned = re.sub(r'[\\/:\*\?"<>\|]', "", value).strip()
+    tokens = []
+    for token in cleaned.split():
+        if token and token[0].isalpha():
+            tokens.append(token[0].upper() + token[1:])
+        else:
+            tokens.append(token)
+    return " ".join(tokens)
+
+
+def _normalize_roadway_for_match(roadway: str | None) -> str:
+    """Normalize a roadway value for comparison: lowercase, strip a leading 'jalur ' prefix."""
+    if not roadway:
+        return ""
+    value = roadway.lower().strip()
+    if value.startswith("jalur "):
+        value = value[len("jalur "):].strip()
+    return value
+
+
+def _fetch_project_details(tower_id: str, roadway: str | None) -> dict | None:
+    """
+    Fetch a project_details row matching the given tower_id and roadway
+    (case-insensitive, tolerant of a leading 'Jalur ' prefix) from the local
+    SQLite database.
+
+    Returns a dict with keys region, roadway, tower_id, tower_type, project_name,
+    or None if no matching row exists.
+    """
+    if not _PROJECT_DB_PATH.exists():
+        logger.warning("Project DB not found at %s", _PROJECT_DB_PATH)
+        return None
+
+    try:
+        conn = sqlite3.connect(str(_PROJECT_DB_PATH))
+    except Exception:
+        logger.exception("Failed to open project DB: %s", _PROJECT_DB_PATH)
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT tower_id, roadway, tower_type, region, project_name "
+            "FROM project_details WHERE LOWER(tower_id) = LOWER(?)",
+            (tower_id,),
+        )
+        rows = cur.fetchall()
+    except Exception:
+        logger.exception("Failed to query project_details for tower=%s", tower_id)
+        return None
+    finally:
+        conn.close()
+
+    target_roadway = _normalize_roadway_for_match(roadway)
+    for row in rows:
+        db_roadway = _normalize_roadway_for_match(row[1])
+        if db_roadway == target_roadway:
+            return {
+                "tower_id": row[0],
+                "roadway": row[1],
+                "tower_type": row[2],
+                "region": row[3],
+                "project_name": row[4],
+            }
+
+    logger.info(
+        "No project_details match for tower_id=%s roadway=%s; skipping group",
+        tower_id,
+        roadway,
+    )
+    return None
+
+
+def generate_docx_reports(
     processed_data_file_path: str,
     temp_dir: Path,
 ) -> list[str]:
     """
-    Generate PDF reports from processed message data file.
+    Generate .docx reports from processed message data file.
 
-    Reads entries from the provided JSON file, groups by report_date, tower_id, and roadway,
-    then generates one PDF per group. Cleans up the processed entries file when done.
+    Reads entries from the provided JSON file, groups by report_date, tower_id,
+    and roadway, matches each group against the project_details DB (case-insensitive
+    on tower_id + roadway), and generates one .docx per matched group. Images tagged
+    as 'Alat Ukur' are routed to the optional Progress pengukuran section. Cleans up
+    the processed entries file when done.
     """
     file_path = temp_dir / processed_data_file_path
     if not file_path.exists():
@@ -288,53 +379,61 @@ def generate_pdf_reports(
         logger.exception("Failed to read processed entries file: %s", file_path)
         return []
 
-    logger.info("Generating PDFs for %d processed entries", len(processed_data))
+    logger.info("Generating .docx reports for %d processed entries", len(processed_data))
 
-    # Group by (report_date, tower_id, roadway) -> sub_id -> list of {message_id, images}
+    # Group by (report_date, tower_id, roadway) -> sections dict + measurement images
     grouped: dict[tuple[date, str, str | None], dict] = {}
     for entry in processed_data:
         report_date = date.fromisoformat(entry["report_date"])
         tower_id = entry["tower_id"]
         roadway = entry.get("roadway")
         sub_id = entry["sub_id"]
+        is_alat_ukur = entry.get("measurement_tools") == "Alat Ukur"
         key = (report_date, tower_id, roadway)
         if key not in grouped:
-            grouped[key] = {}
-        if sub_id not in grouped[key]:
-            grouped[key][sub_id] = []
-        grouped[key][sub_id].append({
-            "message_id": entry["message_id"],
-            "images": entry.get("images", []),
-        })
+            grouped[key] = {"sections": {}, "measurement": []}
 
-    pdf_paths = []
-    for (report_date, tower_id, roadway), sub_data in grouped.items():
-        tower_slug = _slugify(tower_id)
-        roadway_slug = _slugify(roadway)
-        if roadway_slug:
-            filename = f"report-{tower_slug}-{roadway_slug}-{report_date}.pdf"
+        images = entry.get("images", [])
+        if is_alat_ukur:
+            grouped[key]["measurement"].extend(images)
         else:
-            filename = f"report-{tower_slug}-{report_date}.pdf"
+            grouped[key]["sections"].setdefault(sub_id, [])
+            grouped[key]["sections"][sub_id].extend(images)
+
+    docx_paths = []
+    for (report_date, tower_id, roadway), group in grouped.items():
+        # Match against project_details DB; skip if no match.
+        details = _fetch_project_details(tower_id, roadway)
+        if details is None:
+            continue
+
+        # Filename format: "Report {report_date} {tower_id} {roadway}.docx"
+        tower_display = _capitalize_filename_part(details["tower_id"] or tower_id)
+        roadway_display = _capitalize_filename_part(details["roadway"] or roadway or "")
+        parts = ["Report", str(report_date), tower_display]
+        if roadway_display:
+            parts.append(roadway_display)
+        filename = " ".join(parts) + ".docx"
         output_path = temp_dir / filename
 
-        generate_pdf(
-            report_id=tower_id,
+        generate_docx(
+            project_details=details,
             report_date=report_date,
-            roadway=roadway,
-            grouped_data=sub_data,
+            grouped_data=group["sections"],
+            measurement_images=group["measurement"],
             output_path=str(output_path),
         )
-        pdf_paths.append(str(output_path))
+        docx_paths.append(str(output_path))
 
-    # Clean up processed entries file after PDF generation
+    # Clean up processed entries file after generation
     try:
         file_path.unlink()
         logger.debug("Cleaned up processed entries file: %s", file_path)
     except Exception:
         logger.warning("Failed to clean up processed entries file: %s", file_path)
 
-    logger.info("Generated %d PDFs: %s", len(pdf_paths), pdf_paths)
-    return pdf_paths
+    logger.info("Generated %d .docx reports: %s", len(docx_paths), docx_paths)
+    return docx_paths
 
 
 def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
@@ -434,21 +533,22 @@ def create_agent_tools(channel, temp_dir: Path) -> list[StructuredTool]:
     ))
 
     async def _generate(processed_data_file_path: str) -> str:
-        """Generate PDF reports from processed message data file."""
+        """Generate .docx reports from processed message data file."""
         def _sync() -> str:
-            paths = generate_pdf_reports(processed_data_file_path, temp_dir)
+            paths = generate_docx_reports(processed_data_file_path, temp_dir)
             return json.dumps(paths)
         return await asyncio.to_thread(_sync)
 
     tools.append(StructuredTool.from_function(
         coroutine=_generate,
-        name="generate_pdf_reports",
+        name="generate_docx_reports",
         description=(
-            "Generate PDF reports from processed message data. "
+            "Generate .docx reports from processed message data. "
             "Reads entries from a JSON file, groups by report_date, tower_id, and roadway, "
-            "then generates one PDF per group. "
+            "matches each group against the project_details DB (case-insensitive), "
+            "then generates one .docx per matched group. "
             "Input: processed_data_file_path (str, e.g. 'processed_entries.json'). "
-            "Output: JSON string of list of generated PDF file paths."
+            "Output: JSON string of list of generated .docx file paths."
         ),
     ))
 

@@ -107,9 +107,11 @@ def normalize_measurement_tools(raw: str) -> Optional[str]:
     """
     Detect measurement tools text.
 
-    Returns 'Alat Ukur' if the text contains 'alat ukur' (case-insensitive).
+    Returns 'Alat Ukur' only when the text is exactly 'alat ukur'
+    (case-insensitive, with any whitespace count). Phrases that merely
+    contain the words (e.g. 'Tidak ada alat ukur') do NOT match.
     """
-    if re.search(r"alat\s+ukur", raw, re.IGNORECASE):
+    if re.fullmatch(r"alat\s+ukur", raw.strip(), re.IGNORECASE):
         return "Alat Ukur"
     return None
 
@@ -172,7 +174,8 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
             "- section_text: The section text exactly as shown "
             "(e.g. 'Section: Mid', 'Section: Atas')\n"
             "- measurement_tools_text: The measurement tools text exactly as shown "
-            "(e.g. 'Alat ukur')"
+            "(e.g. 'Alat ukur'). "
+            "If no measurement tools text is present, return an empty string."
         )
 
         message = HumanMessage(
