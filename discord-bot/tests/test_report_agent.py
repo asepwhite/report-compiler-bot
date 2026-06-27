@@ -16,15 +16,15 @@ from app.report_agent import run_report_agent
 
 @pytest.mark.asyncio
 async def test_run_report_agent_success(tmp_path):
-    """Agent returns PDF paths in its final message."""
+    """Agent returns .docx paths in its final message."""
     channel = MagicMock()
-    pdf_paths = [str(tmp_path / "report-Tower-495-2026-06-10-2026-06-10.pdf")]
+    docx_paths = [str(tmp_path / "report-Tower-495-2026-06-10-2026-06-10.docx")]
 
     mock_agent = AsyncMock()
     mock_agent.ainvoke.return_value = {
         "messages": [
             MagicMock(content="Tool result", type="tool"),
-            MagicMock(content=f'["{pdf_paths[0]}"]'),
+            MagicMock(content=f'["{docx_paths[0]}"]'),
         ]
     }
 
@@ -46,21 +46,21 @@ async def test_run_report_agent_success(tmp_path):
                     )
 
     assert result["type"] == "report"
-    assert result["pdf_paths"] == pdf_paths
+    assert result["docx_paths"] == docx_paths
     assert ack_called is True
 
 
 @pytest.mark.asyncio
-async def test_run_report_agent_pdf_paths_in_dict(tmp_path):
-    """Agent returns PDF paths inside a JSON dict."""
+async def test_run_report_agent_docx_paths_in_dict(tmp_path):
+    """Agent returns .docx paths inside a JSON dict."""
     channel = MagicMock()
-    pdf_paths = [str(tmp_path / "report.pdf")]
+    docx_paths = [str(tmp_path / "report.docx")]
 
     mock_agent = AsyncMock()
     mock_agent.ainvoke.return_value = {
         "messages": [
             MagicMock(content="Tool result", type="tool"),
-            MagicMock(content='{"pdf_paths": ["' + pdf_paths[0] + '"]}'),
+            MagicMock(content='{"docx_paths": ["' + docx_paths[0] + '"]}'),
         ]
     }
 
@@ -76,7 +76,7 @@ async def test_run_report_agent_pdf_paths_in_dict(tmp_path):
                     )
 
     assert result["type"] == "report"
-    assert result["pdf_paths"] == pdf_paths
+    assert result["docx_paths"] == docx_paths
 
 
 @pytest.mark.asyncio
@@ -243,13 +243,13 @@ async def test_run_report_agent_mixed_intent_blocked(tmp_path):
 async def test_run_report_agent_low_confidence_off_topic_allowed(tmp_path):
     """Low-confidence off-topic is overridden to report_request and agent runs."""
     channel = MagicMock()
-    pdf_paths = [str(tmp_path / "report.pdf")]
+    docx_paths = [str(tmp_path / "report.docx")]
 
     mock_agent = AsyncMock()
     mock_agent.ainvoke.return_value = {
         "messages": [
             MagicMock(content="Tool result", type="tool"),
-            MagicMock(content=f'["{pdf_paths[0]}"]'),
+            MagicMock(content=f'["{docx_paths[0]}"]'),
         ]
     }
 
@@ -270,7 +270,7 @@ async def test_run_report_agent_low_confidence_off_topic_allowed(tmp_path):
                     )
 
     assert result["type"] == "report"
-    assert result["pdf_paths"] == pdf_paths
+    assert result["docx_paths"] == docx_paths
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Discord bot for compiling project report PDFs from channel messages."""
+"""Discord bot for compiling project report .docx files from channel messages."""
 
 import logging
 import os
@@ -182,11 +182,11 @@ async def _handle_nl_command(message):
             return
 
         if result["type"] == "report":
-            files = [discord.File(path) for path in result["pdf_paths"]]
+            files = [discord.File(path) for path in result["docx_paths"]]
             await message.reply(files=files)
             if ack_message:
                 await ack_message.edit(
-                    content=f"✅ {len(result['pdf_paths'])} laporan berhasil dibuat!"
+                    content=f"✅ {len(result['docx_paths'])} laporan berhasil dibuat!"
                 )
             return
 

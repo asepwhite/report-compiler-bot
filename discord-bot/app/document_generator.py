@@ -1,141 +1,272 @@
-"""Document generator module for creating report PDFs with image grids."""
+"""Document generator module for creating report .docx files with image grids."""
 
+import re
 from datetime import date
 from pathlib import Path
 
-from fpdf import FPDF, XPos, YPos
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.shared import Inches
+
 from PIL import Image
 
 
-# Page layout constants (A4 in mm)
-PAGE_WIDTH = 210
-PAGE_HEIGHT = 297
-MARGIN = 10
+# Image grid layout constants
 GRID_COLS = 3
-GRID_GAP = 2
+# Maximum height (in inches) for a single image cell to prevent overly tall images.
+MAX_CELL_HEIGHT_IN = 2.2
+# Width (in inches) of each image cell in the 3-column grid.
+CELL_WIDTH_IN = 2.0
 
-CELL_WIDTH = (PAGE_WIDTH - 2 * MARGIN - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS
+# Project specs table column widths (in inches).
+_SPECS_COL_WIDTHS = [1.0, 2.2, 1.6, 1.4]
 
-
-class _ReportPDF(FPDF):
-    """Internal PDF subclass with custom header styling."""
-
-    def header(self):
-        # No automatic header; we draw our own per page
-        pass
-
-
-def generate_pdf(
-    report_id: str,
-    report_date: date,
-    roadway: str | None,
-    grouped_data: dict,
-    output_path: str,
-):
-    """
-    Generate a PDF report for a single (tower_id, report_date, roadway) group.
-
-    Parameters
-    ----------
-    report_id : str
-        The tower id (e.g. "Tower 123").
-    report_date : date
-        The report date from photo metadata.
-    roadway : str | None
-        The roadway (e.g. "Jalur Purwakarta - Banyuwangi"), or None.
-    grouped_data : dict
-        Mapping of sub_id -> list of message dicts.
-        Each message dict has keys: "message_id", "images" (list of local file paths).
-    output_path : str
-        Where to write the resulting PDF file.
-    """
-    pdf = _ReportPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=MARGIN)
-
-    # ── Title ──
-    pdf.set_font("Helvetica", "B", 16)
-    if roadway:
-        title = f"Progress report {report_id} - {roadway} - {report_date}"
-    else:
-        title = f"Progress report {report_id} - {report_date}"
-    pdf.cell(0, 12, title, align="C", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-    pdf.ln(4)
-
-    # ── Sections per sub-id ──
-    for sub_id, messages in grouped_data.items():
-        # Check if we need a new page for the section header
-        if pdf.get_y() > PAGE_HEIGHT - MARGIN - 30:
-            pdf.add_page()
-
-        # Sub-id header
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(0, 10, sub_id, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        pdf.ln(2)
-
-        # Collect all images for this sub-id
-        all_images = []
-        for msg in messages:
-            all_images.extend(msg.get("images", []))
-
-        # Draw images in grid
-        _draw_image_grid(pdf, all_images)
-
-        pdf.ln(6)
-
-    pdf.output(output_path)
+# Fixed display order of sections in the Progress Pekerjaan block.
+# Maps the position keyword (lowercase, normalized from sub_id) to the display name.
+_SECTION_ORDER = ["atas", "tengah", "bawah"]
+_SECTION_ALIASES = {
+    "top": "atas",
+    "mid": "tengah",
+    "bottom": "bawah",
+    "atas": "atas",
+    "tengah": "tengah",
+    "bawah": "bawah",
+}
 
 
-def _draw_image_grid(pdf: FPDF, image_paths: list[str]):
-    """Draw images in a 3-column grid layout."""
+def _section_position(sub_id: str) -> str | None:
+    """Extract the normalized section position keyword from a sub_id string."""
+    match = re.search(r"section\s*[:\-]?\s*([a-zA-Z]+)", sub_id or "", re.IGNORECASE)
+    if not match:
+        return None
+    word = match.group(1).lower()
+    return _SECTION_ALIASES.get(word)
+
+
+def _format_report_date(report_date: date) -> str:
+    """Format a report date as 'DD Month YYYY' (Indonesian month names)."""
+    months_id = [
+        "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+        "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+    ]
+    return f"{report_date.day} {months_id[report_date.month - 1]} {report_date.year}"
+
+
+def _add_centered_paragraph(doc: Document, text: str, bold: bool = False) -> None:
+    """Add a centered paragraph with optional bold text."""
+    para = doc.add_paragraph(text)
+    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for run in para.runs:
+        run.bold = bold
+    return para
+
+
+def _add_image_grid(doc: Document, image_paths: list[str]) -> None:
+    """Render images in a 3-column borderless table, scaling to fit cell width."""
     if not image_paths:
-        pdf.set_font("Helvetica", "", 10)
-        pdf.cell(0, 8, "(tidak ada gambar)", ln=True)
         return
 
-    x_start = MARGIN
-    y_start = pdf.get_y()
-    col = 0
-    row_height = 0
-
+    # Build rows of GRID_COLS images each.
+    rows = []
+    current = []
     for img_path in image_paths:
         if not Path(img_path).exists():
             continue
+        current.append(img_path)
+        if len(current) >= GRID_COLS:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
 
-        # Get image dimensions
-        with Image.open(img_path) as img:
-            orig_w, orig_h = img.size
+    if not rows:
+        return
 
-        # Calculate scaled height maintaining aspect ratio
-        scale_h = CELL_WIDTH * orig_h / orig_w
-        max_cell_height = 80  # mm, prevent overly tall images
-        cell_h = min(scale_h, max_cell_height)
+    table = doc.add_table(rows=len(rows), cols=GRID_COLS)
+    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _remove_table_borders(table)
 
-        # Check if we need a new page
-        if y_start + cell_h > PAGE_HEIGHT - MARGIN:
-            pdf.add_page()
-            y_start = pdf.get_y()
-            col = 0
-            row_height = 0
+    for r, row_images in enumerate(rows):
+        for c in range(GRID_COLS):
+            cell = table.rows[r].cells[c]
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if c < len(row_images):
+                _add_scaled_image(cell, row_images[c])
 
-        # Calculate x position
-        x = x_start + col * (CELL_WIDTH + GRID_GAP)
-        y = y_start
 
-        # Place image
-        pdf.image(img_path, x=x, y=y, w=CELL_WIDTH, h=0)  # h=0 keeps aspect ratio
+def _remove_table_borders(table) -> None:
+    """Remove all borders from a table by setting its borders to nil."""
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+    # Remove existing tblBorders if present
+    existing = tblPr.find(qn("w:tblBorders"))
+    if existing is not None:
+        tblPr.remove(existing)
+    borders = tblPr.makeelement(qn("w:tblBorders"), {})
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = borders.makeelement(qn(f"w:{edge}"), {
+            qn("w:val"): "none",
+            qn("w:sz"): "0",
+            qn("w:space"): "0",
+            qn("w:color"): "auto",
+        })
+        borders.append(el)
+    tblPr.append(borders)
 
-        # Track row height
-        row_height = max(row_height, cell_h)
 
-        col += 1
-        if col >= GRID_COLS:
-            col = 0
-            y_start += row_height + GRID_GAP
-            row_height = 0
+def _add_scaled_image(cell, img_path: str) -> None:
+    """Add an image to a table cell, scaled to CELL_WIDTH_IN with capped height."""
+    with Image.open(img_path) as img:
+        orig_w, orig_h = img.size
 
-    # Advance cursor past the last row
-    if col > 0:
-        y_start += row_height + GRID_GAP
+    width = CELL_WIDTH_IN
+    scale_h = width * orig_h / orig_w
+    height = min(scale_h, MAX_CELL_HEIGHT_IN)
 
-    pdf.set_y(y_start)
+    para = cell.paragraphs[0]
+    run = para.add_run()
+    run.add_picture(img_path, width=Inches(width), height=Inches(height))
+
+
+def _set_cell_text(cell, text: str, bold: bool = False,
+                   align: WD_ALIGN_PARAGRAPH = WD_ALIGN_PARAGRAPH.LEFT) -> None:
+    """Replace a cell's paragraph text with a single bold run."""
+    para = cell.paragraphs[0]
+    # Clear any existing runs
+    for run in list(para.runs):
+        run._element.getparent().remove(run._element)
+    para.alignment = align
+    run = para.add_run(text)
+    run.bold = bold
+
+
+def _set_col_widths(table, widths: list[float]) -> None:
+    """Set fixed column widths (in inches) on every cell for consistent layout."""
+    from docx.shared import Inches as _Inches
+    for i, w in enumerate(widths):
+        for row in table.rows:
+            row.cells[i].width = _Inches(w)
+
+
+def _add_specs_table(
+    doc: Document,
+    roadway: str,
+    date_text: str,
+    tower_id: str,
+    tower_type: str,
+) -> None:
+    """Add the project specs as a 2-row, 4-column borderless table."""
+    table = doc.add_table(rows=2, cols=4)
+    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _remove_table_borders(table)
+    _set_col_widths(table, _SPECS_COL_WIDTHS)
+
+    rows = [
+        ("Penghantar", f": {roadway}", "Tanggal Pemasangan", f": {date_text}"),
+        ("No Tower", f": {tower_id}", "Tipe tower", f": {tower_type}"),
+    ]
+    for r, (label1, value1, label2, value2) in enumerate(rows):
+        _set_cell_text(table.rows[r].cells[0], label1)
+        _set_cell_text(table.rows[r].cells[1], value1)
+        _set_cell_text(table.rows[r].cells[2], label2)
+        _set_cell_text(table.rows[r].cells[3], value2)
+
+
+def _add_footer_table(doc: Document) -> None:
+    """Add the two-company footer as a 1-row, 2-column borderless table (one line)."""
+    table = doc.add_table(rows=1, cols=2)
+    _remove_table_borders(table)
+    _set_col_widths(table, [3.1, 3.1])
+
+    _set_cell_text(
+        table.rows[0].cells[0], "PT TESLA DAYA ELEKTRIKA",
+        bold=True, align=WD_ALIGN_PARAGRAPH.LEFT,
+    )
+    _set_cell_text(
+        table.rows[0].cells[1], "PT PLN (PERSERO)",
+        bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT,
+    )
+
+
+def generate_docx(
+    project_details: dict | None,
+    report_date: date,
+    grouped_data: dict,
+    measurement_images: list[str],
+    output_path: str,
+):
+    """
+    Generate a .docx report matching the contoh-progress-report layout.
+
+    Parameters
+    ----------
+    project_details : dict | None
+        Project details dict with keys: region, roadway, tower_id, tower_type.
+        If None, the report is still generated with blank placeholders.
+    report_date : date
+        The report date (from photo metadata). Displayed as 'Tanggal Pemasangan'.
+    grouped_data : dict
+        Mapping of sub_id (e.g. 'Section atas') -> list of local image file paths
+        for the Progress Pekerjaan section.
+    measurement_images : list[str]
+        List of local image file paths tagged as 'Alat Ukur'. Rendered only in
+        the Progress pengukuran section. If empty, that section is omitted.
+    output_path : str
+        Where to write the resulting .docx file.
+    """
+    details = project_details or {}
+    region = details.get("region", "") or ""
+    roadway = details.get("roadway", "") or ""
+    tower_id = details.get("tower_id", "") or ""
+    tower_type = details.get("tower_type", "") or ""
+    date_text = _format_report_date(report_date)
+
+    doc = Document()
+
+    # ── Title block ──
+    _add_centered_paragraph(doc, "LAPORAN DOKUMENTASI PEMASANGAN", bold=True)
+    _add_centered_paragraph(
+        doc,
+        f"PEKERJAAN PENGADAAN DAN PEMASANGAN PROTEKSI PETIR DI {region}",
+        bold=True,
+    )
+    doc.add_paragraph()
+
+    # ── Project specs (borderless table for vertical alignment) ──
+    _add_specs_table(doc, roadway, date_text, tower_id, tower_type)
+    doc.add_paragraph()
+
+    # ── Progress Pekerjaan ──
+    _add_centered_paragraph(doc, "Progress Pekerjaan")
+
+    # Order sections by fixed order, only rendering those with images.
+    buckets: dict[str, list[str]] = {}
+    for sub_id, images in grouped_data.items():
+        pos = _section_position(sub_id) or sub_id
+        buckets.setdefault(pos, [])
+        buckets[pos].extend(images)
+
+    for pos in _SECTION_ORDER:
+        images = buckets.get(pos)
+        if not images:
+            continue
+        display_name = f"Section {pos.capitalize()}"
+        _add_centered_paragraph(doc, display_name)
+        _add_image_grid(doc, images)
+
+    # ── Progress pengukuran (optional) ──
+    if measurement_images:
+        _add_centered_paragraph(doc, "Progress pengukuran")
+        _add_image_grid(doc, measurement_images)
+
+    # Spacer before footer
+    doc.add_paragraph()
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    # ── Footer (borderless table, guaranteed single line) ──
+    _add_footer_table(doc)
+
+    doc.save(output_path)
+    return output_path

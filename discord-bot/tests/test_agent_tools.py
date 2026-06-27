@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.agent_tools import process_and_filter_messages, retrieve_messages, generate_pdf_reports
+from app.agent_tools import process_and_filter_messages, retrieve_messages, generate_docx_reports
 
 
 @pytest.fixture
@@ -471,8 +471,8 @@ async def test_process_and_filter_messages_parallel_all_messages(temp_dir):
     assert len(entries) == 120
 
 
-def test_generate_pdf_reports_reads_from_file(temp_dir):
-    """generate_pdf_reads entries from a file path and cleans up after."""
+def test_generate_docx_reports_reads_from_file(temp_dir):
+    """generate_docx_reports reads entries from a file path and cleans up after."""
     # Create processed entries file
     entries = [
         {
@@ -480,6 +480,7 @@ def test_generate_pdf_reports_reads_from_file(temp_dir):
             "sub_id": "Section atas",
             "report_date": "2026-06-10",
             "roadway": "Jalur Jakarta - Bandung",
+            "measurement_tools": None,
             "message_id": 1,
             "images": [],
         }
@@ -488,17 +489,90 @@ def test_generate_pdf_reports_reads_from_file(temp_dir):
     with open(processed_file, "w") as f:
         json.dump(entries, f)
 
-    result = generate_pdf_reports("processed_entries.json", temp_dir)
+    fake_details = {
+        "tower_id": "tower 123",
+        "roadway": "jakarta - bandung",
+        "tower_type": "500kV",
+        "region": "wilayah kerja UPT Gandul",
+    }
+    with patch("app.agent_tools._fetch_project_details", return_value=fake_details):
+        result = generate_docx_reports("processed_entries.json", temp_dir)
 
     assert len(result) == 1
-    assert result[0].endswith(".pdf")
+    assert result[0].endswith(".docx")
     assert Path(result[0]).exists()
 
     # Verify processed entries file was cleaned up
     assert not processed_file.exists()
 
 
-def test_generate_pdf_reports_missing_file(temp_dir):
+def test_generate_docx_reports_missing_file(temp_dir):
     """Missing processed entries file returns empty list."""
-    result = generate_pdf_reports("nonexistent.json", temp_dir)
+    result = generate_docx_reports("nonexistent.json", temp_dir)
     assert result == []
+
+
+def test_generate_docx_reports_skips_when_no_project_match(temp_dir):
+    """When no project_details match exists, no report is generated."""
+    entries = [
+        {
+            "tower_id": "Tower 999",
+            "sub_id": "Section atas",
+            "report_date": "2026-06-10",
+            "roadway": "Jalur Nowhere",
+            "measurement_tools": None,
+            "message_id": 1,
+            "images": [],
+        }
+    ]
+    processed_file = temp_dir / "processed_entries.json"
+    with open(processed_file, "w") as f:
+        json.dump(entries, f)
+
+    with patch("app.agent_tools._fetch_project_details", return_value=None):
+        result = generate_docx_reports("processed_entries.json", temp_dir)
+
+    assert result == []
+    # Processed file is still cleaned up
+    assert not processed_file.exists()
+
+
+def test_generate_docx_reports_routes_alat_ukur_to_pengukuran(temp_dir, tmp_path):
+    """Images with measurement_tools == 'Alat Ukur' go to Progress pengukuran."""
+    from PIL import Image
+    from docx import Document
+
+    # Create one dummy image
+    img_path = tmp_path / "alat_ukur.png"
+    Image.new("RGB", (50, 50), (1, 2, 3)).save(img_path)
+
+    entries = [
+        {
+            "tower_id": "Tower 123",
+            "sub_id": "Section atas",
+            "report_date": "2026-06-10",
+            "roadway": "Jalur Jakarta - Bandung",
+            "measurement_tools": "Alat Ukur",
+            "message_id": 1,
+            "images": [str(img_path)],
+        },
+    ]
+    processed_file = temp_dir / "processed_entries.json"
+    with open(processed_file, "w") as f:
+        json.dump(entries, f)
+
+    fake_details = {
+        "tower_id": "tower 123",
+        "roadway": "jakarta - bandung",
+        "tower_type": "500kV",
+        "region": "UPT Gandul",
+    }
+    with patch("app.agent_tools._fetch_project_details", return_value=fake_details):
+        result = generate_docx_reports("processed_entries.json", temp_dir)
+
+    assert len(result) == 1
+    doc = Document(result[0])
+    texts = [p.text for p in doc.paragraphs]
+    assert "Progress pengukuran" in texts
+    # Alat Ukur image must NOT appear under Progress Pekerjaan sections
+    assert "Section Atas" not in texts

@@ -1,4 +1,4 @@
-"""Report agent orchestrator: natural language → ReAct agent → PDFs."""
+"""Report agent orchestrator: natural language → ReAct agent → .docx reports."""
 
 import json
 import logging
@@ -44,13 +44,13 @@ When the user asks for a report, use the available tools in order:
    downloads images, extracts metadata with Gemini vision, filters by tower number and roadway,
    and writes valid entries to a file. Returns {file_path: str, entry_count: int}.
    Store the file_path for the next step.
-4. generate_pdf_reports – takes the processed_data_file_path (e.g. "processed_entries.json")
-   and creates PDF files grouped by report_date, tower_id, and roadway.
+4. generate_docx_reports – takes the processed_data_file_path (e.g. "processed_entries.json")
+    and creates .docx files grouped by report_date, tower_id, and roadway.
 
 When report generation finishes, return the final result as a JSON array
-of PDF file paths, e.g. ["/tmp/report-tower-123-jalur-purwakarta-banyuwangi-2024-01-01.pdf"].
+of .docx file paths, e.g. ["/tmp/report-tower-123-jalur-purwakarta-banyuwangi-2024-01-01.docx"].
 
-If no PDFs could be generated, explain why in Indonesian.
+If no .docx reports could be generated, explain why in Indonesian.
 """
 
 
@@ -79,22 +79,22 @@ def _extract_text(content) -> str:
     return str(content) if content is not None else ""
 
 
-def _extract_pdf_paths(text: str) -> list[str] | None:
-    """Try to extract PDF file paths from agent final text."""
+def _extract_docx_paths(text: str) -> list[str] | None:
+    """Try to extract .docx file paths from agent final text."""
     # 1. Try full JSON parse
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
             return parsed
         if isinstance(parsed, dict):
-            for key in ("pdf_paths", "paths", "pdfs", "files"):
+            for key in ("docx_paths", "paths", "docx", "files"):
                 if key in parsed and isinstance(parsed[key], list):
                     return parsed[key]
     except json.JSONDecodeError:
         pass
 
-    # 2. Heuristic: look for path-like strings
-    path_pattern = re.compile(r'(["\'])(/[^"\']+\.pdf)\1')
+    # 2. Heuristic: look for path-like strings ending in .docx
+    path_pattern = re.compile(r'(["\'])(/[^"\']+\.docx)\1')
     matches = path_pattern.findall(text)
     if matches:
         return [m[1] for m in matches]
@@ -140,7 +140,7 @@ async def run_report_agent(
         One of:
         - {"type": "off_topic", "message": "..."}
         - {"type": "greeting", "message": "..."}
-        - {"type": "report",   "pdf_paths": [...]}
+        - {"type": "report",   "docx_paths": [...]}
         - {"type": "error",    "message": "..."}
     """
     logger.info("Starting report agent for query: %s", user_query)
@@ -174,10 +174,10 @@ async def run_report_agent(
     if not _had_tool_calls(all_messages):
         return {"type": "greeting", "message": content}
 
-    # Tool calls happened → try to extract PDF paths
-    pdf_paths = _extract_pdf_paths(content)
-    if pdf_paths:
-        return {"type": "report", "pdf_paths": pdf_paths}
+    # Tool calls happened → try to extract .docx paths
+    docx_paths = _extract_docx_paths(content)
+    if docx_paths:
+        return {"type": "report", "docx_paths": docx_paths}
 
-    # Tool calls but no PDFs → error explanation
+    # Tool calls but no reports → error explanation
     return {"type": "error", "message": content or "Gagal membuat laporan secara otomatis, silakan buat laporan secara manual."}
