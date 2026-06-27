@@ -53,6 +53,22 @@ def _format_report_date(report_date: date) -> str:
     return f"{report_date.day} {months_id[report_date.month - 1]} {report_date.year}"
 
 
+def _capitalize_value(value: str) -> str:
+    """
+    Capitalize the first letter of each whitespace-separated token,
+    preserving the remaining characters (e.g. '500kV' stays '500kV').
+
+    Tokens that start with a non-letter (digits, symbols) are left unchanged.
+    """
+    tokens = []
+    for token in value.split():
+        if token and token[0].isalpha():
+            tokens.append(token[0].upper() + token[1:])
+        else:
+            tokens.append(token)
+    return " ".join(tokens)
+
+
 def _add_centered_paragraph(doc: Document, text: str, bold: bool = False) -> None:
     """Add a centered paragraph with optional bold text."""
     para = doc.add_paragraph(text)
@@ -202,8 +218,8 @@ def generate_docx(
     Parameters
     ----------
     project_details : dict | None
-        Project details dict with keys: region, roadway, tower_id, tower_type.
-        If None, the report is still generated with blank placeholders.
+        Project details dict with keys: region, roadway, tower_id, tower_type,
+        project_name. If None, the report is still generated with blank placeholders.
     report_date : date
         The report date (from photo metadata). Displayed as 'Tanggal Pemasangan'.
     grouped_data : dict
@@ -217,18 +233,19 @@ def generate_docx(
     """
     details = project_details or {}
     region = details.get("region", "") or ""
-    roadway = details.get("roadway", "") or ""
-    tower_id = details.get("tower_id", "") or ""
-    tower_type = details.get("tower_type", "") or ""
+    roadway = _capitalize_value(details.get("roadway", "") or "")
+    tower_id = _capitalize_value(details.get("tower_id", "") or "")
+    tower_type = _capitalize_value(details.get("tower_type", "") or "")
+    project_name = details.get("project_name", "") or ""
     date_text = _format_report_date(report_date)
 
     doc = Document()
 
     # ── Title block ──
-    _add_centered_paragraph(doc, "LAPORAN DOKUMENTASI PEMASANGAN", bold=True)
+    _add_centered_paragraph(doc, "LAPORAN DOKUMENTASI PEMASANGAN PEKERJAAN", bold=True)
     _add_centered_paragraph(
         doc,
-        f"PEKERJAAN PENGADAAN DAN PEMASANGAN PROTEKSI PETIR DI {region}",
+        f"{project_name} DI WILAYAH KERJA {region}",
         bold=True,
     )
     doc.add_paragraph()

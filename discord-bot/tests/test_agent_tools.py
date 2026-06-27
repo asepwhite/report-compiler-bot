@@ -494,6 +494,7 @@ def test_generate_docx_reports_reads_from_file(temp_dir):
         "roadway": "jakarta - bandung",
         "tower_type": "500kV",
         "region": "wilayah kerja UPT Gandul",
+        "project_name": "PENGADAAN DAN PEMASANGAN PROTEKSI PETIR",
     }
     with patch("app.agent_tools._fetch_project_details", return_value=fake_details):
         result = generate_docx_reports("processed_entries.json", temp_dir)
@@ -566,6 +567,7 @@ def test_generate_docx_reports_routes_alat_ukur_to_pengukuran(temp_dir, tmp_path
         "roadway": "jakarta - bandung",
         "tower_type": "500kV",
         "region": "UPT Gandul",
+        "project_name": "PENGADAAN DAN PEMASANGAN PROTEKSI PETIR",
     }
     with patch("app.agent_tools._fetch_project_details", return_value=fake_details):
         result = generate_docx_reports("processed_entries.json", temp_dir)

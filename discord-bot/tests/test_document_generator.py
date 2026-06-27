@@ -36,6 +36,7 @@ def project_details():
         "roadway": "jakarta - bandung",
         "tower_id": "Tower 123",
         "tower_type": "500kV",
+        "project_name": "PENGADAAN DAN PEMASANGAN PROTEKSI PETIR",
     }
 
 
@@ -99,8 +100,11 @@ class TestGenerateDocx:
         )
         doc = Document(str(output_path))
         texts = _paragraph_texts(doc)
-        assert "LAPORAN DOKUMENTASI PEMASANGAN" in texts
-        assert "PEKERJAAN PENGADAAN DAN PEMASANGAN PROTEKSI PETIR DI wilayah kerja UPT Gandul" in texts
+        assert "LAPORAN DOKUMENTASI PEMASANGAN PEKERJAAN" in texts
+        assert (
+            "PENGADAAN DAN PEMASANGAN PROTEKSI PETIR DI WILAYAH KERJA wilayah kerja UPT Gandul"
+            in texts
+        )
         title_para = doc.paragraphs[0]
         assert title_para.alignment is not None  # centered
         assert title_para.runs[0].bold is True
@@ -117,7 +121,7 @@ class TestGenerateDocx:
         )
         doc = Document(str(output_path))
         body = "\n".join(_all_texts(doc))
-        assert "jakarta - bandung" in body
+        assert "Jakarta - Bandung" in body
         assert "16 April 2026" in body
         assert "Tower 123" in body
         assert "500kV" in body
@@ -137,7 +141,7 @@ class TestGenerateDocx:
         assert specs is not None, "Specs table not found"
         row0 = [c.text for c in specs.rows[0].cells]
         row1 = [c.text for c in specs.rows[1].cells]
-        assert row0 == ["Penghantar", ": jakarta - bandung", "Tanggal Pemasangan", ": 16 April 2026"]
+        assert row0 == ["Penghantar", ": Jakarta - Bandung", "Tanggal Pemasangan", ": 16 April 2026"]
         assert row1 == ["No Tower", ": Tower 123", "Tipe tower", ": 500kV"]
 
     def test_progress_pekerjaan_heading(self, temp_dir, project_details, dummy_images):
@@ -280,6 +284,6 @@ class TestGenerateDocx:
         assert output_path.exists()
         doc = Document(str(output_path))
         texts = _paragraph_texts(doc)
-        assert "LAPORAN DOKUMENTASI PEMASANGAN" in texts
+        assert "LAPORAN DOKUMENTASI PEMASANGAN PEKERJAAN" in texts
         assert "Progress Pekerjaan" in texts
         assert "Progress pengukuran" not in texts

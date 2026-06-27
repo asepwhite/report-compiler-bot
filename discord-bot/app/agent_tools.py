@@ -269,6 +269,25 @@ def _slugify(value: str | None) -> str:
     return slug
 
 
+def _capitalize_filename_part(value: str) -> str:
+    """
+    Capitalize the first letter of each token and strip filesystem-invalid chars.
+
+    Used for report filenames: preserves spaces, dashes, and digits while
+    removing characters like / \\ : * ? \" < > | that break filenames.
+    """
+    if not value:
+        return ""
+    cleaned = re.sub(r'[\\/:\*\?"<>\|]', "", value).strip()
+    tokens = []
+    for token in cleaned.split():
+        if token and token[0].isalpha():
+            tokens.append(token[0].upper() + token[1:])
+        else:
+            tokens.append(token)
+    return " ".join(tokens)
+
+
 def _normalize_roadway_for_match(roadway: str | None) -> str:
     """Normalize a roadway value for comparison: lowercase, strip a leading 'jalur ' prefix."""
     if not roadway:
@@ -285,8 +304,8 @@ def _fetch_project_details(tower_id: str, roadway: str | None) -> dict | None:
     (case-insensitive, tolerant of a leading 'Jalur ' prefix) from the local
     SQLite database.
 
-    Returns a dict with keys region, roadway, tower_id, tower_type, or None
-    if no matching row exists.
+    Returns a dict with keys region, roadway, tower_id, tower_type, project_name,
+    or None if no matching row exists.
     """
     if not _PROJECT_DB_PATH.exists():
         logger.warning("Project DB not found at %s", _PROJECT_DB_PATH)
@@ -301,8 +320,8 @@ def _fetch_project_details(tower_id: str, roadway: str | None) -> dict | None:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT tower_id, roadway, tower_type, region FROM project_details "
-            "WHERE LOWER(tower_id) = LOWER(?)",
+            "SELECT tower_id, roadway, tower_type, region, project_name "
+            "FROM project_details WHERE LOWER(tower_id) = LOWER(?)",
             (tower_id,),
         )
         rows = cur.fetchall()
@@ -321,6 +340,7 @@ def _fetch_project_details(tower_id: str, roadway: str | None) -> dict | None:
                 "roadway": row[1],
                 "tower_type": row[2],
                 "region": row[3],
+                "project_name": row[4],
             }
 
     logger.info(
@@ -387,12 +407,13 @@ def generate_docx_reports(
         if details is None:
             continue
 
-        tower_slug = _slugify(details["tower_id"]) or _slugify(tower_id)
-        roadway_slug = _slugify(details["roadway"]) or _slugify(roadway)
-        if roadway_slug:
-            filename = f"report-{tower_slug}-{roadway_slug}-{report_date}.docx"
-        else:
-            filename = f"report-{tower_slug}-{report_date}.docx"
+        # Filename format: "Report {report_date} {tower_id} {roadway}.docx"
+        tower_display = _capitalize_filename_part(details["tower_id"] or tower_id)
+        roadway_display = _capitalize_filename_part(details["roadway"] or roadway or "")
+        parts = ["Report", str(report_date), tower_display]
+        if roadway_display:
+            parts.append(roadway_display)
+        filename = " ".join(parts) + ".docx"
         output_path = temp_dir / filename
 
         generate_docx(
