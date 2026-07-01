@@ -5,6 +5,7 @@ import base64
 import logging
 import re
 from datetime import date
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,17 @@ from app.llm import create_llm
 
 
 logger = logging.getLogger(__name__)
+
+
+_FUZZY_LABEL_THRESHOLD = 0.75
+
+
+def _label_token_matches(token: str, canonical: str) -> bool:
+    """Return True if `token` is within edit distance ~2 of `canonical`."""
+    return (
+        SequenceMatcher(None, token.lower(), canonical.lower()).ratio()
+        >= _FUZZY_LABEL_THRESHOLD
+    )
 
 
 class RawImageMetadata(BaseModel):
@@ -76,14 +88,26 @@ def normalize_section(raw: str) -> Optional[str]:
     Handles formats like:
       - Section: Mid, Section - Top, Section: Bottom
       - Section: Atas, Section: Tengah, Section: bawah
+      - Typo-tolerant: Sction, Secion, etc. (ratio >= 0.75 vs 'section')
     """
+    value_re = r"(top|mid|bottom|atas|tengah|bawah)"
     match = re.search(
-        r"section\s*[:\-]?\s*(top|mid|bottom|atas|tengah|bawah)",
+        rf"section\s*[:\-]?\s*{value_re}",
         raw,
         re.IGNORECASE,
     )
     if match:
         return f"Section {match.group(1).lower()}"
+
+    # Fuzzy fallback: tolerate keyword typos like "Sction" or "Secion".
+    fuzzy_match = re.search(
+        rf"^([A-Za-z]+)\s*[:\-]?\s*{value_re}",
+        raw,
+        re.IGNORECASE,
+    )
+    if fuzzy_match and _label_token_matches(fuzzy_match.group(1), "section"):
+        return f"Section {fuzzy_match.group(2).lower()}"
+
     return None
 
 
@@ -94,12 +118,27 @@ def normalize_roadway(raw: str) -> Optional[str]:
     Handles multi-line values. Example:
       - Jalur: Purwakarta - Banyuwangi
       - Jalur: ianine\n- angakgna
+      - Typo-tolerant: Jakur:, Jlaur:, etc. (ratio >= 0.75 vs 'jalur')
     """
     match = re.search(r"jalur\s*[:\-]?\s*(.+)", raw, re.IGNORECASE | re.DOTALL)
     if match:
         value = match.group(1).replace("\n", " ").strip()
         value = re.sub(r"\s+", " ", value)
         return f"Jalur {value}"
+
+    # Fuzzy fallback: tolerate keyword typos like "Jakur" or "Jlaur".
+    fuzzy_match = re.search(
+        r"^([A-Za-z]+)\s*[:\-]?\s*(.+)",
+        raw,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if fuzzy_match and _label_token_matches(fuzzy_match.group(1), "jalur"):
+        value = fuzzy_match.group(2).replace("\n", " ").strip()
+        value = re.sub(r"\s+", " ", value)
+        if not value:
+            return None
+        return f"Jalur {value}"
+
     return None
 
 
@@ -175,7 +214,15 @@ async def extract_image_metadata(image_path: Path) -> Optional[NormalizedImageMe
             "(e.g. 'Section: Mid', 'Section: Atas')\n"
             "- measurement_tools_text: The measurement tools text exactly as shown "
             "(e.g. 'Alat ukur'). "
-            "If no measurement tools text is present, return an empty string."
+            "If no measurement tools text is present, return an empty string.\n\n"
+            "The label keywords themselves may be mistyped in the image "
+            "(e.g. 'Jakur:', 'Jlaur:', 'Sction:', 'Secion Atas'). "
+            "Normalize any label-keyword typo to its canonical form — "
+            "'Jalur' for the roadway label and 'Section' for the section label — "
+            "but transcribe the value after the label exactly as shown, including any "
+            "typos in the value itself. The 'date_text', 'tower_id_text', and "
+            "'measurement_tools_text' fields are not label keywords and should be "
+            "transcribed as-is."
         )
 
         message = HumanMessage(
