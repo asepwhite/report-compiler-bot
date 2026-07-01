@@ -169,6 +169,73 @@ def test_normalize_roadway_empty():
 
 
 # ───────────────────────────────────────────────────────────────
+# normalize_roadway — fuzzy label tolerance
+# ───────────────────────────────────────────────────────────────
+
+
+def test_normalize_roadway_typo_jakur():
+    """Jakur: → Jalur (fuzzy)."""
+    assert (
+        normalize_roadway("Jakur: Purwakarta - Banyuwangi")
+        == "Jalur Purwakarta - Banyuwangi"
+    )
+
+
+def test_normalize_roadway_typo_jlaur():
+    """Jlaur: → Jalur (fuzzy)."""
+    assert (
+        normalize_roadway("Jlaur: ianine - angakgna")
+        == "Jalur ianine - angakgna"
+    )
+
+
+def test_normalize_roadway_typo_no_colon():
+    """Jakur (no colon) → Jalur (fuzzy + optional separator)."""
+    assert normalize_roadway("Jakur Purwakarta") == "Jalur Purwakarta"
+
+
+def test_normalize_roadway_typo_multiline():
+    """Multi-line value with fuzzy label."""
+    raw = "Jlaur: ianine\n- angakgna"
+    assert normalize_roadway(raw) == "Jalur ianine - angakgna"
+
+
+def test_normalize_roadway_typo_too_far():
+    """Label too far from 'jalur' (ratio < 0.75) returns None."""
+    assert normalize_roadway("Xqrur: Foo") is None
+
+
+# ───────────────────────────────────────────────────────────────
+# normalize_section — fuzzy label tolerance
+# ───────────────────────────────────────────────────────────────
+
+
+def test_normalize_section_typo_sction():
+    """Sction → Section (fuzzy)."""
+    assert normalize_section("Sction: Atas") == "Section atas"
+
+
+def test_normalize_section_typo_sction_no_colon():
+    """Sction Atas (no colon) → Section atas."""
+    assert normalize_section("Sction Atas") == "Section atas"
+
+
+def test_normalize_section_typo_sction_mid():
+    """Sction: Mid → Section mid."""
+    assert normalize_section("Sction: Mid") == "Section mid"
+
+
+def test_normalize_section_typo_invalid_value():
+    """Fuzzy label match with invalid value still returns None."""
+    assert normalize_section("Sction Foo") is None
+
+
+def test_normalize_section_typo_too_far():
+    """Label too far from 'section' returns None."""
+    assert normalize_section("Xectn: Mid") is None
+
+
+# ───────────────────────────────────────────────────────────────
 # normalize_measurement_tools
 # ───────────────────────────────────────────────────────────────
 
@@ -433,3 +500,60 @@ async def test_extract_image_metadata_gemini_error(tmp_path):
         result = await extract_image_metadata(img_path)
 
     assert result is None
+
+
+# ───────────────────────────────────────────────────────────────
+# extract_image_metadata — fuzzy label fallback
+# ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_typo_jakur_corrected_by_regex(tmp_path):
+    """Gemini did not correct 'Jakur:' — regex fuzzy fallback still extracts it."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 567",
+        roadway_text="Jakur: Purwakarta - Banyuwangi",
+        section_text="Section: Atas",
+        measurement_tools_text="",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is not None
+    assert result.roadway == "Jalur Purwakarta - Banyuwangi"
+
+
+@pytest.mark.asyncio
+async def test_extract_image_metadata_typo_sction_corrected_by_regex(tmp_path):
+    """Gemini did not correct 'Sction Atas' — regex fuzzy fallback still extracts it."""
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"fake image data")
+
+    raw = RawImageMetadata(
+        date_text="2026-06-25",
+        tower_id_text="Tower: 567",
+        roadway_text="Jalur: Purwakarta - Banyuwangi",
+        section_text="Sction Atas",
+        measurement_tools_text="",
+    )
+
+    mock_llm = MagicMock()
+    mock_structured = MagicMock()
+    mock_structured.invoke.return_value = raw
+    mock_llm.with_structured_output.return_value = mock_structured
+
+    with patch("app.image_metadata_extractor.create_llm", return_value=mock_llm):
+        result = await extract_image_metadata(img_path)
+
+    assert result is not None
+    assert result.sub_id == "Section atas"
